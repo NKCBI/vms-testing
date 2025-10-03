@@ -58,7 +58,7 @@ router.post('/webhook-test', express.json({ type: '*/*' }), (req, res) => {
     res.status(200).send('Test received successfully.');
 });
 
-// --- Webhook (Now a Public Route for Testing) ---
+// --- Webhook (Public Route) ---
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     // Log that a request was received on the main webhook endpoint
     console.log(`[Webhook] Received a request at ${new Date().toISOString()}`);
