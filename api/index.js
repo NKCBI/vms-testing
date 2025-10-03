@@ -11,56 +11,15 @@ const { loadSystemSettings, getSystemSettings } = require('../services/settings'
 const videoRoutes = require('./video'); 
 
 const router = express.Router();
-router.use(express.json());
-
-
-// --- Server Status Endpoint (Public GET) ---
-// You can visit this in a browser to confirm the server is running.
-router.get('/status', (req, res) => {
-    console.log(`[Status] GET request received at ${new Date().toISOString()}`);
-    res.status(200).json({ status: 'ok', message: 'Server is running.' });
-});
-
-// --- Auth (Public Route) ---
-router.post('/auth/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        const db = getDb();
-        const usersCollection = db.collection('users');
-        const user = await usersCollection.findOne({ username });
-
-        if (!user) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const isValid = await bcrypt.compare(password, user.password);
-        if (!isValid) {
-            return res.status(401).json({ error: 'Invalid credentials' });
-        }
-
-        const tokenPayload = { 
-            userId: user._id, 
-            username: user.username, 
-            role: user.role, 
-            dispatchGroupId: user.dispatchGroupId 
-        };
-
-        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
-        res.json({ token, user: { username: user.username, role: user.role, dispatchGroupId: user.dispatchGroupId } });
-
-    } catch (error) {
-        console.error("Login error:", error);
-        res.status(500).json({ error: 'An internal server error occurred.' });
-    }
-});
 
 // --- Webhook (Public Route) ---
-// This middleware is crucial for signature validation as it provides the raw, unparsed request body.
+// This route MUST be defined BEFORE the global express.json() middleware.
+// It uses express.raw() to get the raw request body, which is required for HMAC signature validation.
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     console.log(`[Webhook] Received a request at ${new Date().toISOString()}`);
 
     const systemSettings = getSystemSettings();
-    if (systemSettings.WEBHOOK_SECRET) { // Using the correct env var name
+    if (systemSettings.WEBHOOK_SECRET) {
         const signature = req.headers['x-turingvideo-signature'];
         if (!signature) {
             console.log('[Webhook] Request rejected: Signature missing.');
@@ -119,6 +78,50 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     } catch (error) {
         console.error('Error processing webhook:', error);
         res.status(500).send('Error processing webhook.');
+    }
+});
+
+// This global middleware parses JSON for all routes DEFINED AFTER THIS LINE.
+router.use(express.json());
+
+
+// --- Server Status Endpoint (Public GET) ---
+// You can visit this in a browser to confirm the server is running.
+router.get('/status', (req, res) => {
+    console.log(`[Status] GET request received at ${new Date().toISOString()}`);
+    res.status(200).json({ status: 'ok', message: 'Server is running.' });
+});
+
+// --- Auth (Public Route) ---
+router.post('/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const db = getDb();
+        const usersCollection = db.collection('users');
+        const user = await usersCollection.findOne({ username });
+
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const isValid = await bcrypt.compare(password, user.password);
+        if (!isValid) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const tokenPayload = { 
+            userId: user._id, 
+            username: user.username, 
+            role: user.role, 
+            dispatchGroupId: user.dispatchGroupId 
+        };
+
+        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
+        res.json({ token, user: { username: user.username, role: user.role, dispatchGroupId: user.dispatchGroupId } });
+
+    } catch (error) {
+        console.error("Login error:", error);
+        res.status(500).json({ error: 'An internal server error occurred.' });
     }
 });
 
