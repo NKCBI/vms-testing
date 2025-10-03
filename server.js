@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3001;
 const app = express();
 
 app.use(cors());
-app.use(express.json());
+// app.use(express.json()); // <-- THIS LINE HAS BEEN REMOVED. The JSON parser in api/index.js will handle it.
 
 const server = http.createServer(app);
 
