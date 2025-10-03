@@ -58,20 +58,22 @@ router.post('/webhook-test', express.json({ type: '*/*' }), (req, res) => {
     res.status(200).send('Test received successfully.');
 });
 
-
-// --- All routes below this line are protected ---
-router.use(authenticateToken);
-
-
-// --- Webhook (Validated with signature) ---
+// --- Webhook (Now a Public Route for Testing) ---
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    // Log that a request was received on the main webhook endpoint
+    console.log(`[Webhook] Received a request at ${new Date().toISOString()}`);
+
     const systemSettings = getSystemSettings();
     if (systemSettings.webhookSecret) {
         const signature = req.headers['x-turingvideo-signature'];
-        if (!signature) return res.status(401).send('Signature missing');
+        if (!signature) {
+            console.log('[Webhook] Request rejected: Signature missing.');
+            return res.status(401).send('Signature missing');
+        }
 
         const expectedSignature = crypto.createHmac('md5', systemSettings.webhookSecret).update(req.body).digest('hex');
         if (signature !== expectedSignature) {
+            console.log('[Webhook] Request rejected: Invalid signature.');
             return res.status(403).send('Invalid signature');
         }
     }
@@ -80,6 +82,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         const alertData = JSON.parse(req.body.toString());
         const cameraId = alertData.camera?.id;
         if (!cameraId) {
+            console.log('[Webhook] Request rejected: Missing camera ID.');
             return res.status(400).send('Webhook data missing camera ID.');
         }
 
@@ -90,6 +93,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
         const device = await devicesCollection.findOne({ "cameras.id": cameraId, "cameras.isMonitored": true });
         if (!device) {
+            console.log(`[Webhook] Alert ignored for camera ${cameraId}: not monitored.`);
             return res.status(200).send('Alert ignored: camera not monitored.');
         }
 
@@ -105,16 +109,21 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         };
 
         const result = await alertsCollection.insertOne(newAlertDocument);
-
+        
         // Use the broadcast function from the request object
         req.broadcastToGroup(targetGroupId, { type: 'new_alert', alert: { _id: result.insertedId, ...newAlertDocument } });
-
+        
+        console.log(`[Webhook] Successfully processed and stored alert ${result.insertedId}.`);
         res.status(200).send('Webhook processed successfully.');
     } catch (error) {
         console.error('Error processing webhook:', error);
         res.status(500).send('Error processing webhook.');
     }
 });
+
+
+// --- All routes below this line are protected ---
+router.use(authenticateToken);
 
 
 // --- Monitored Devices Route ---
@@ -345,3 +354,4 @@ router.delete('/dispatch-groups/:id', async (req, res) => {
 });
 
 module.exports = router;
+
