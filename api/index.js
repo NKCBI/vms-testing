@@ -47,6 +47,17 @@ router.post('/auth/login', async (req, res) => {
     }
 });
 
+// --- Simple Webhook Test Endpoint (Public) ---
+// This endpoint has no security and simply logs any request it receives.
+router.post('/webhook-test', express.json({ type: '*/*' }), (req, res) => {
+    console.log('--- WEBHOOK TEST RECEIVED ---');
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('Request Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Request Body:', req.body);
+    console.log('--- END WEBHOOK TEST ---');
+    res.status(200).send('Test received successfully.');
+});
+
 
 // --- All routes below this line are protected ---
 router.use(authenticateToken);
@@ -94,7 +105,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         };
 
         const result = await alertsCollection.insertOne(newAlertDocument);
-        
+
         // Use the broadcast function from the request object
         req.broadcastToGroup(targetGroupId, { type: 'new_alert', alert: { _id: result.insertedId, ...newAlertDocument } });
 
