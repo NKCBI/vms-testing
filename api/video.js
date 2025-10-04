@@ -5,6 +5,7 @@ const { getSystemSettings } = require('../services/settings');
 
 const router = express.Router();
 
+// This route is called by the frontend to get the RTSP URL from the Turing API.
 router.post('/rtsp-url', async (req, res) => {
     const { camera_id, resolution } = req.body;
     console.log(`[RTSP] Received request for RTSP URL for camera_id: ${camera_id}`);
@@ -48,13 +49,14 @@ router.post('/rtsp-url', async (req, res) => {
     }
 });
 
-// --- MediaMTX Control Endpoints ---
+// This route is called by the frontend to tell MediaMTX to start pulling the RTSP stream.
 router.post('/start-stream', async (req, res) => {
     const { pathName, rtspUrl } = req.body;
-    console.log(`[MediaMTX] Start-stream request for path: ${pathName} with URL: ${rtspUrl}`);
+    console.log(`[MediaMTX] Start-stream request for path: ${pathName}`);
     
-    // Use an environment variable for the MediaMTX URL, with a fallback for local development.
-    const mediaMtxApiUrl = process.env.MEDIAMTX_API_URL || `http://localhost:9997/v3`;
+    const baseMtxUrl = process.env.MEDIAMTX_API_URL || `http://localhost:9997/v3`;
+    // --- FIX: Sanitize the URL to remove any trailing slashes ---
+    const mediaMtxApiUrl = baseMtxUrl.replace(/\/$/, '');
 
     try {
         let pathExists = false;
@@ -75,7 +77,6 @@ router.post('/start-stream', async (req, res) => {
         if (pathExists) {
             console.log(`[MediaMTX] Path ${pathName} exists. Patching source for hotswap...`);
             const payload = { source: rtspUrl };
-            console.log(`[MediaMTX] PATCH payload for '${pathName}':`, JSON.stringify(payload));
             await axios.patch(`${mediaMtxApiUrl}/config/paths/patch/${pathName}`, payload);
             console.log(`[MediaMTX] Successfully patched source for '${pathName}'.`);
             res.json({ success: true, message: `MediaMTX path ${pathName} source updated.` });
@@ -87,7 +88,6 @@ router.post('/start-stream', async (req, res) => {
                 sourceOnDemandCloseAfter: '20s',
                 rtspTransport: 'tcp'
             };
-            console.log(`[MediaMTX] POST payload for '${pathName}':`, JSON.stringify(payload));
             await axios.post(`${mediaMtxApiUrl}/config/paths/add/${pathName}`, payload);
             console.log(`[MediaMTX] Successfully created path '${pathName}'.`);
             res.json({ success: true, message: `MediaMTX path ${pathName} configured.` });
@@ -98,22 +98,21 @@ router.post('/start-stream', async (req, res) => {
     }
 });
 
-
+// NOTE: This /stream route seems to duplicate the PATCH logic from /start-stream.
+// It can likely be removed later for simplification, but we will fix it for now.
 router.patch('/stream', async (req, res) => {
     const { pathName, rtspUrl } = req.body;
     
-    // Use an environment variable for the MediaMTX URL, with a fallback for local development.
-    const mediaMtxApiUrl = process.env.MEDIAMTX_API_URL || `http://localhost:9997/v3`;
+    const baseMtxUrl = process.env.MEDIAMTX_API_URL || `http://localhost:9997/v3`;
+    // --- FIX: Sanitize the URL to remove any trailing slashes ---
+    const mediaMtxApiUrl = baseMtxUrl.replace(/\/$/, '');
 
     try {
         const payload = {
             source: rtspUrl
         };
-
         console.log(`[MediaMTX] Attempting to patch path ${pathName} with new source:`, rtspUrl);
-
         const response = await axios.patch(`${mediaMtxApiUrl}/config/paths/patch/${pathName}`, payload);
-
         console.log(`[MediaMTX] Successfully received response for path patch:`, response.status, response.data);
         res.json({ success: true, message: `MediaMTX path ${pathName} source updated.` });
     } catch (error) {
