@@ -6,15 +6,14 @@ const crypto = require('crypto');
 const { getDb } = require('../database');
 // const authenticateToken = require('../middleware/auth'); // Kept commented out for now
 const { loadSystemSettings, getSystemSettings } = require('../services/settings');
-
-// Import the new video router
 const videoRoutes = require('./video'); 
 
 const router = express.Router();
 
+// --- NEW: In-memory cache for idempotency ---
+const processedAlertIds = new Set();
+
 // --- Webhook (Public Route) ---
-// This route MUST be defined BEFORE the global express.json() middleware.
-// It uses express.raw() to get the raw request body, which is required for HMAC signature validation.
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     console.log(`[Webhook] Received a request at ${new Date().toISOString()}`);
 
@@ -35,8 +34,24 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     }
 
     try {
-        // We now need to parse the raw body buffer into a JSON object.
         const alertData = JSON.parse(req.body.toString());
+
+        // --- IDEMPOTENCY CHECK ---
+        const alertId = alertData.id; // IMPORTANT: Assumes the unique ID is at the root. Verify this field name.
+        if (!alertId) {
+            console.warn('[Webhook] Alert data is missing a unique `id` field. Cannot perform idempotency check.');
+        } else if (processedAlertIds.has(alertId)) {
+            console.log(`[Webhook] Duplicate alert ID received: ${alertId}. Ignoring.`);
+            return res.status(200).send('Duplicate alert ignored.');
+        } else {
+            processedAlertIds.add(alertId);
+            setTimeout(() => {
+                processedAlertIds.delete(alertId);
+                console.log(`[Webhook] Expired alertId ${alertId} from cache.`);
+            }, 60000);
+        }
+        // --- END IDEMPOTENCY CHECK ---
+
         const cameraId = alertData.camera?.id;
         if (!cameraId) {
             console.log('[Webhook] Request rejected: Missing camera ID in parsed body.');
@@ -73,7 +88,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             console.warn('[Webhook] broadcastToGroup function not available on request object.');
         }
         
-        console.log(`[Webhook] Successfully processed and stored alert ${result.insertedId}.`);
+        console.log(`[Webhook] Successfully processed and stored alert for ID: ${alertId || 'N/A'}. Inserted ID: ${result.insertedId}.`);
         res.status(200).send('Webhook processed successfully.');
     } catch (error) {
         console.error('Error processing webhook:', error);
@@ -86,7 +101,6 @@ router.use(express.json());
 
 
 // --- Server Status Endpoint (Public GET) ---
-// You can visit this in a browser to confirm the server is running.
 router.get('/status', (req, res) => {
     console.log(`[Status] GET request received at ${new Date().toISOString()}`);
     res.status(200).json({ status: 'ok', message: 'Server is running.' });
@@ -344,4 +358,3 @@ router.delete('/dispatch-groups/:id', async (req, res) => {
 });
 
 module.exports = router;
-
