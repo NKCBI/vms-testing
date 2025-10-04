@@ -10,7 +10,6 @@ const videoRoutes = require('./video');
 
 const router = express.Router();
 
-// --- NEW: In-memory cache for idempotency ---
 const processedAlertIds = new Set();
 
 // --- Webhook (Public Route) ---
@@ -36,19 +35,18 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     try {
         const alertData = JSON.parse(req.body.toString());
 
-        // --- IDEMPOTENCY CHECK ---
-        const alertId = alertData.id; // IMPORTANT: Assumes the unique ID is at the root. Verify this field name.
+        // --- IDEMPOTENCY CHECK (Using the correct 'event_id' field) ---
+        const alertId = alertData.event_id; 
         if (!alertId) {
-            console.warn('[Webhook] Alert data is missing a unique `id` field. Cannot perform idempotency check.');
+            console.warn('[Webhook] Alert data is missing the `event_id` field. Cannot perform idempotency check.');
         } else if (processedAlertIds.has(alertId)) {
-            console.log(`[Webhook] Duplicate alert ID received: ${alertId}. Ignoring.`);
+            console.log(`[Webhook] Duplicate event_id received: ${alertId}. Ignoring.`);
             return res.status(200).send('Duplicate alert ignored.');
         } else {
             processedAlertIds.add(alertId);
             setTimeout(() => {
                 processedAlertIds.delete(alertId);
-                console.log(`[Webhook] Expired alertId ${alertId} from cache.`);
-            }, 60000);
+            }, 60000); // Remove after 1 minute
         }
         // --- END IDEMPOTENCY CHECK ---
 
@@ -88,7 +86,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             console.warn('[Webhook] broadcastToGroup function not available on request object.');
         }
         
-        console.log(`[Webhook] Successfully processed and stored alert for ID: ${alertId || 'N/A'}. Inserted ID: ${result.insertedId}.`);
+        console.log(`[Webhook] Successfully processed event_id: ${alertId}. Inserted DB ID: ${result.insertedId}.`);
         res.status(200).send('Webhook processed successfully.');
     } catch (error) {
         console.error('Error processing webhook:', error);
