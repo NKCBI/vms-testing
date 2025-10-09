@@ -15,13 +15,15 @@ function initializeWebSocket(server) {
     });
 
     // --- WebSocket Authentication Handler ---
-    // This now only handles authentication for the alert service.
     server.on('upgrade', (request, socket, head) => {
+        // --- LOGGING ADDED ---
+        // Log the origin to see where the connection request is coming from.
+        const origin = request.headers.origin;
+        console.log(`[WebSocket Upgrade] Received upgrade request from Origin: ${origin}`);
+
         const parameters = new URLSearchParams(url.parse(request.url).search);
         const token = parameters.get('token');
 
-        // The video stream connection is an unauthenticated API call, 
-        // so we can ignore any request that doesn't have a token.
         if (!token) {
             socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
             socket.destroy();
@@ -36,7 +38,6 @@ function initializeWebSocket(server) {
                 return;
             }
             
-            // If the token is valid, complete the WebSocket upgrade for the alerts server.
             alertWss.handleUpgrade(request, socket, head, (ws) => {
                 alertWss.emit('connection', ws, request, user);
             });
@@ -45,7 +46,6 @@ function initializeWebSocket(server) {
 
     console.log("✅ WebSocket service initialized for Alerts.");
     
-    // Return the broadcast function so server.js can use it.
     return { broadcastToGroup };
 }
 
@@ -67,4 +67,3 @@ module.exports = {
     initializeWebSocket,
     broadcastToGroup,
 };
-
