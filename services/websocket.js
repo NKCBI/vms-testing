@@ -7,17 +7,13 @@ let alertWss;
 function initializeWebSocket(server) {
     alertWss = new WebSocket.Server({ noServer: true });
 
-    // --- Real-time Alert Logic ---
     alertWss.on('connection', (ws, req, user) => {
         ws.dispatchGroupId = user.dispatchGroupId ? user.dispatchGroupId.toString() : 'general';
         console.log(`[Alerts] Client connected to group: ${ws.dispatchGroupId}`);
         ws.on('close', () => console.log('[Alerts] Client disconnected.'));
     });
 
-    // --- WebSocket Authentication Handler ---
     server.on('upgrade', (request, socket, head) => {
-        // --- LOGGING ADDED ---
-        // Log the origin to see where the connection request is coming from.
         const origin = request.headers.origin;
         console.log(`[WebSocket Upgrade] Received upgrade request from Origin: ${origin}`);
 
@@ -56,11 +52,27 @@ function broadcastToGroup(dispatchGroupId, data) {
     }
     const groupId = dispatchGroupId ? dispatchGroupId.toString() : 'general';
     const message = JSON.stringify(data);
-    alertWss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && client.dispatchGroupId === groupId) {
-            client.send(message);
+
+    // --- LOGGING ADDED ---
+    console.log(`[BROADCAST] Starting broadcast for group: ${groupId}. Total connected clients: ${alertWss.clients.size}`);
+    
+    let clientsFoundForGroup = 0;
+    alertWss.clients.forEach((client, index) => {
+        const clientIdentifier = `Client #${index + 1}`;
+        if (client.readyState === WebSocket.OPEN) {
+            if (client.dispatchGroupId === groupId) {
+                console.log(`[BROADCAST]   - ${clientIdentifier} (Group: ${client.dispatchGroupId}): MATCH FOUND. SENDING message.`);
+                client.send(message);
+                clientsFoundForGroup++;
+            } else {
+                console.log(`[BROADCAST]   - ${clientIdentifier} (Group: ${client.dispatchGroupId}): SKIPPING (group mismatch).`);
+            }
+        } else {
+            console.log(`[BROADCAST]   - ${clientIdentifier}: SKIPPING (connection not open).`);
         }
     });
+
+    console.log(`[BROADCAST] Broadcast complete. Sent message to ${clientsFoundForGroup} client(s).`);
 }
 
 module.exports = {
