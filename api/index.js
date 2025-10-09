@@ -61,13 +61,32 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         const devicesCollection = db.collection('devices');
         const dispatchGroupsCollection = db.collection('dispatchGroups');
 
+        console.log(`[WEBHOOK_TRACE] Checking for monitored device with camera ID: ${cameraId}`);
         const device = await devicesCollection.findOne({ "cameras.id": cameraId, "cameras.isMonitored": true });
+        
         if (!device) {
-            console.log(`[Webhook] Alert ignored for camera ${cameraId}: not monitored.`);
+            console.log(`[WEBHOOK_TRACE] RESULT: NOT FOUND. Alert ignored because camera is not monitored.`);
+            const unmonitoredDevice = await devicesCollection.findOne({ "cameras.id": cameraId });
+            if (unmonitoredDevice) {
+                const problemCamera = unmonitoredDevice.cameras.find(c => c.id === cameraId);
+                console.log(`[WEBHOOK_TRACE] DETAIL: The camera exists, but its 'isMonitored' flag is currently '${problemCamera.isMonitored}'.`);
+            } else {
+                console.log(`[WEBHOOK_TRACE] DETAIL: No device containing camera ID ${cameraId} was found at all.`);
+            }
             return res.status(200).send('Alert ignored: camera not monitored.');
         }
 
+        console.log(`[WEBHOOK_TRACE] RESULT: FOUND. Device Name: ${device.name}. Now checking for dispatch group.`);
+        
+        console.log(`[WEBHOOK_TRACE] Checking for group containing Site ID: ${device._id} (Data Type: ${typeof device._id})`);
         const group = await dispatchGroupsCollection.findOne({ siteIds: device._id });
+        
+        if (group) {
+            console.log(`[WEBHOOK_TRACE] RESULT: FOUND. Group Name: ${group.name}. Alert will be sent to group ID: ${group._id}`);
+        } else {
+            console.log(`[WEBHOOK_TRACE] RESULT: NOT FOUND. Site is not in any dispatch group. Alert will be sent to 'general' channel.`);
+        }
+        
         const targetGroupId = group ? group._id : 'general';
 
         const newAlertDocument = { 
@@ -82,8 +101,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         
         if (req.broadcastToGroup) {
             req.broadcastToGroup(targetGroupId, { type: 'new_alert', alert: { _id: result.insertedId, ...newAlertDocument } });
-        } else {
-            console.warn('[Webhook] broadcastToGroup function not available on request object.');
         }
         
         console.log(`[Webhook] Successfully processed event_id: ${alertId}. Inserted DB ID: ${result.insertedId}.`);
@@ -173,8 +190,12 @@ router.get('/devices', async (req, res) => {
 });
 
 router.put('/cameras/:id/monitor', async (req, res) => {
+    const cameraId = parseInt(req.params.id);
+    const newStatus = req.body.isMonitored;
+    console.log(`[BACKEND] PUT /cameras/${cameraId}/monitor received. Attempting to set 'isMonitored' to: ${newStatus}`);
+    
     const devicesCollection = getDb().collection('devices');
-    await devicesCollection.updateOne({ "cameras.id": parseInt(req.params.id) }, { $set: { "cameras.$.isMonitored": req.body.isMonitored } });
+    await devicesCollection.updateOne({ "cameras.id": cameraId }, { $set: { "cameras.$.isMonitored": newStatus } });
     res.json({ success: true });
 });
 
@@ -334,7 +355,7 @@ router.get('/dispatch-groups', async (req, res) => {
 router.post('/dispatch-groups', async (req, res) => {
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { name, siteIds } = req.body;
-    const result = await dispatchGroupsCollection.insertOne({ name, siteIds: siteIds.map(id => parseInt(id)) });
+    const result = await dispatchGroupsCollection.insertOne({ name, siteIds: siteIds.map(id => new ObjectId(id)) });
     res.status(201).json({ success: true, group: { _id: result.insertedId, name, siteIds } });
 });
 
@@ -342,7 +363,7 @@ router.put('/dispatch-groups/:id', async (req, res) => {
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { name, siteIds } = req.body;
-    await dispatchGroupsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { name, siteIds: siteIds.map(id => parseInt(id)) } });
+    await dispatchGroupsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { name, siteIds: siteIds.map(id => new ObjectId(id)) } });
     res.json({ success: true });
 });
 
