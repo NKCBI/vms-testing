@@ -334,7 +334,7 @@ router.get('/dispatch-groups', async (req, res) => {
 router.post('/dispatch-groups', async (req, res) => {
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { name, siteIds } = req.body;
-    const result = await dispatchGroupsCollection.insertOne({ name, siteIds: siteIds.map(id => new ObjectId(id)) });
+    const result = await dispatchGroupsCollection.insertOne({ name, siteIds: siteIds.map(id => parseInt(id)) });
     res.status(201).json({ success: true, group: { _id: result.insertedId, name, siteIds } });
 });
 
@@ -342,7 +342,7 @@ router.put('/dispatch-groups/:id', async (req, res) => {
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { name, siteIds } = req.body;
-    await dispatchGroupsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { name, siteIds: siteIds.map(id => new ObjectId(id)) } });
+    await dispatchGroupsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { name, siteIds: siteIds.map(id => parseInt(id)) } });
     res.json({ success: true });
 });
 
