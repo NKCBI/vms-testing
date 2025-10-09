@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const authenticateToken = require('../middleware/auth');
+const { getDb } = require('../database'); // <-- Import getDb
 const { getSystemSettings } = require('../services/settings');
 
 const router = express.Router();
@@ -8,24 +8,46 @@ const router = express.Router();
 // This route is called by the frontend to get the RTSP URL from the Turing API.
 router.post('/rtsp-url', async (req, res) => {
     const { camera_id, resolution } = req.body;
-    console.log(`[RTSP] Received request for RTSP URL for camera_id: ${camera_id}`);
-    if (!camera_id) {
+    const cameraIdInt = parseInt(camera_id);
+    console.log(`[RTSP] Received request for RTSP URL for camera_id: ${cameraIdInt}`);
+    if (!cameraIdInt) {
         return res.status(400).json({ message: 'camera_id is required.' });
     }
 
+    // --- MODIFICATION START ---
+    let turingAccessToken;
+    try {
+        const db = getDb();
+        const devicesCollection = db.collection('devices');
+        const site = await devicesCollection.findOne({ "cameras.id": cameraIdInt });
+        
+        if (!site) {
+            console.error(`[RTSP] Could not find a site containing camera_id: ${cameraIdInt}`);
+            return res.status(404).json({ message: 'Camera not found in any site.' });
+        }
+        
+        const camera = site.cameras.find(c => c.id === cameraIdInt);
+        if (!camera || !camera.turingApiToken) {
+            console.error(`[RTSP] Camera found, but it is missing an associated API token.`);
+            return res.status(500).json({ message: 'Camera is not configured with an API token.' });
+        }
+        
+        turingAccessToken = camera.turingApiToken;
+        console.log(`[RTSP] Found API token associated with camera ${cameraIdInt}.`);
+
+    } catch (dbError) {
+        console.error('[RTSP] Database error while retrieving camera token:', dbError);
+        return res.status(500).json({ message: 'Failed to retrieve camera configuration.' });
+    }
+    // --- MODIFICATION END ---
+    
     const settings = getSystemSettings();
     const turingApiUrl = settings.turingApiUrl || 'https://app.turingvideo.com/openapi';
-    const turingAccessToken = settings.turingApiToken;
-
-    if (!turingAccessToken) {
-        console.error('[RTSP] Turing API token is not configured.');
-        return res.status(500).json({ message: 'Server is not configured for the video API.' });
-    }
 
     try {
-        console.log(`[RTSP] Calling Turing API for camera: ${camera_id}`);
+        console.log(`[RTSP] Calling Turing API for camera: ${cameraIdInt}`);
         const turingApiResponse = await axios.post(`${turingApiUrl}/nest/live/rtsp`, 
-            { camera_id, resolution: resolution || 'sub' },
+            { camera_id: cameraIdInt, resolution: resolution || 'sub' },
             { headers: { 'Authorization': `Bearer ${turingAccessToken}`, 'Content-Type': 'application/json' } }
         );
 
@@ -34,12 +56,12 @@ router.post('/rtsp-url', async (req, res) => {
             console.log(`[RTSP] Successfully retrieved original URL: ${originalUrl}`);
             const authenticatedUrl = originalUrl.replace('rtsp://', `rtsp://token:${turingAccessToken}@`);
 
-            console.log(`[API] Successfully authenticated and retrieved stream for camera ${camera_id}.`);
+            console.log(`[API] Successfully authenticated and retrieved stream for camera ${cameraIdInt}.`);
 
             turingApiResponse.data.ret.play_url = authenticatedUrl;
             res.json(turingApiResponse.data);
         } else {
-            console.error(`[API] Turing API did not return a play_url for camera ${camera_id}. This is likely a token permission issue. Full response:`, JSON.stringify(turingApiResponse.data, null, 2));
+            console.error(`[API] Turing API did not return a play_url for camera ${cameraIdInt}. This is likely a token permission issue. Full response:`, JSON.stringify(turingApiResponse.data, null, 2));
             res.status(403).json({ message: `Access to video stream denied by API. Please check token permissions.` });
         }
 
@@ -48,6 +70,9 @@ router.post('/rtsp-url', async (req, res) => {
         res.status(500).json({ message: 'An error occurred while contacting the Turing API.' });
     }
 });
+
+// ... rest of the file remains the same ...
+// ... /start-stream and /stream routes ...
 
 // This route is called by the frontend to tell MediaMTX to start pulling the RTSP stream.
 router.post('/start-stream', async (req, res) => {
