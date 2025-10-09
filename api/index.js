@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { getDb } = require('../database');
-// const authenticateToken = require('../middleware/auth'); // Kept commented out for now
+// const authenticateToken = require('../middleware/auth');
 const { loadSystemSettings, getSystemSettings } = require('../services/settings');
 const videoRoutes = require('./video'); 
 
@@ -73,6 +73,49 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             return res.status(200).send('Alert ignored: camera not monitored.');
         }
 
+        // --- NEW: SCHEDULE CHECKING LOGIC ---
+        const settingsCollection = db.collection('settings');
+        const schedulesCollection = db.collection('schedules');
+
+        // 1. Find the camera's schedule assignment
+        const assignmentsDoc = await settingsCollection.findOne({ name: 'scheduleAssignments' });
+        const scheduleId = assignmentsDoc?.assignments?.[cameraId];
+
+        let isWithinSchedule = false;
+
+        // 2. If the camera is assigned to a schedule, check the time
+        if (scheduleId) {
+            const schedule = await schedulesCollection.findOne({ _id: new ObjectId(scheduleId) });
+            if (schedule) {
+                const now = new Date();
+                const dayOfWeek = now.getDay(); // Sunday = 0, Monday = 1, ...
+                const currentTime = now.toTimeString().slice(0, 5); // "HH:mm" format
+
+                const todaySchedule = schedule.days[dayOfWeek]; // Get today's time blocks
+                if (todaySchedule && todaySchedule.length > 0) {
+                    for (const block of todaySchedule) {
+                        if (currentTime >= block.startTime && currentTime <= block.endTime) {
+                            isWithinSchedule = true;
+                            break; // Exit loop once we find a matching block
+                        }
+                    }
+                }
+                // If there are no blocks for today, isWithinSchedule remains false
+            }
+            // If scheduleId exists but the schedule document isn't found, isWithinSchedule remains false
+        } else {
+            // If the camera is NOT on any schedule, we consider it active 24/7 (as long as isMonitored is true)
+            isWithinSchedule = true;
+        }
+
+        // 3. If the camera is on a schedule but the current time is outside of any active block, ignore the alert.
+        if (!isWithinSchedule) {
+            console.log(`[Webhook] Alert ignored for camera ${cameraId}: outside of scheduled monitoring time.`);
+            return res.status(200).send('Alert ignored: outside of schedule.');
+        }
+        // --- END OF SCHEDULE CHECKING LOGIC ---
+
+
         const group = await dispatchGroupsCollection.findOne({ siteIds: device._id });
         const targetGroupId = group ? group._id : 'general';
 
@@ -99,6 +142,8 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         res.status(500).send('Error processing webhook.');
     }
 });
+
+// ... (the rest of the file is unchanged) ...
 
 router.use(express.json());
 
@@ -139,46 +184,20 @@ router.post('/auth/login', async (req, res) => {
     }
 });
 
-// router.use(authenticateToken); 
-
-// --- Monitored Devices Route ---
 router.get('/monitored-devices', async (req, res) => {
     try {
         const db = getDb();
         const devicesCollection = db.collection('devices');
         
-        // --- FIX: Replaced the old aggregation with a more robust one ---
-        const aggregationPipeline = [
-            // Stage 1: Create a new 'cameras' field with only the monitored cameras
-            {
-                $project: {
-                    name: 1,
-                    isConfigured: 1,
-                    account_number: 1,
-                    district: 1,
-                    pertinent_info: 1,
-                    cameras: {
-                        $filter: {
-                            input: "$cameras",
-                            as: "camera",
-                            cond: { $eq: [ "$$camera.isMonitored", true ] }
-                        }
-                    }
-                }
-            },
-            // Stage 2: Filter out any sites that have no monitored cameras left
-            {
-                $match: {
-                    "cameras.0": { $exists: true }
-                }
-            },
-            // Stage 3: Sort the final results
-            {
-                $sort: { name: 1 }
-            }
-        ];
+        const sitesWithMonitoredCameras = await devicesCollection.find({ 
+            "cameras.isMonitored": true 
+        }).sort({ name: 1 }).toArray();
 
-        const monitoredSites = await devicesCollection.aggregate(aggregationPipeline).toArray();
+        const monitoredSites = sitesWithMonitoredCameras.map(site => {
+            const monitoredCameras = site.cameras.filter(camera => camera.isMonitored);
+            return { ...site, cameras: monitoredCameras };
+        });
+
         res.json(monitoredSites);
 
     } catch(error) { 
