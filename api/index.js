@@ -35,7 +35,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     try {
         const alertData = JSON.parse(req.body.toString());
 
-        // --- IDEMPOTENCY CHECK (Using the correct 'event_id' field) ---
         const alertId = alertData.event_id; 
         if (!alertId) {
             console.warn('[Webhook] Alert data is missing the `event_id` field. Cannot perform idempotency check.');
@@ -48,7 +47,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
                 processedAlertIds.delete(alertId);
             }, 60000); // Remove after 1 minute
         }
-        // --- END IDEMPOTENCY CHECK ---
 
         const cameraId = alertData.camera?.id;
         if (!cameraId) {
@@ -61,7 +59,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         const devicesCollection = db.collection('devices');
         const dispatchGroupsCollection = db.collection('dispatchGroups');
 
-        // --- FIX: Use $elemMatch to ensure the specific camera is monitored ---
         const device = await devicesCollection.findOne({ 
             "cameras": { 
                 "$elemMatch": { 
@@ -103,17 +100,13 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     }
 });
 
-// This global middleware parses JSON for all routes DEFINED AFTER THIS LINE.
 router.use(express.json());
 
-
-// --- Server Status Endpoint (Public GET) ---
 router.get('/status', (req, res) => {
     console.log(`[Status] GET request received at ${new Date().toISOString()}`);
     res.status(200).json({ status: 'ok', message: 'Server is running.' });
 });
 
-// --- Auth (Public Route) ---
 router.post('/auth/login', async (req, res) => {
     try {
         const { username, password } = req.body;
@@ -146,10 +139,7 @@ router.post('/auth/login', async (req, res) => {
     }
 });
 
-
-// --- All routes below this line would be protected in production ---
 // router.use(authenticateToken); 
-
 
 // --- Monitored Devices Route ---
 router.get('/monitored-devices', async (req, res) => {
@@ -157,25 +147,48 @@ router.get('/monitored-devices', async (req, res) => {
         const db = getDb();
         const devicesCollection = db.collection('devices');
         
-        const monitoredSites = await devicesCollection.aggregate([
-            { $unwind: "$cameras" }, 
-            { $match: { "cameras.isMonitored": true } }, 
-            { $group: { _id: "$_id", name: { $first: "$name" }, cameras: { $push: "$cameras" } } },
-            { $sort: { name: 1 } }
-        ]).toArray();
+        // --- FIX: Replaced the old aggregation with a more robust one ---
+        const aggregationPipeline = [
+            // Stage 1: Create a new 'cameras' field with only the monitored cameras
+            {
+                $project: {
+                    name: 1,
+                    isConfigured: 1,
+                    account_number: 1,
+                    district: 1,
+                    pertinent_info: 1,
+                    cameras: {
+                        $filter: {
+                            input: "$cameras",
+                            as: "camera",
+                            cond: { $eq: [ "$$camera.isMonitored", true ] }
+                        }
+                    }
+                }
+            },
+            // Stage 2: Filter out any sites that have no monitored cameras left
+            {
+                $match: {
+                    "cameras.0": { $exists: true }
+                }
+            },
+            // Stage 3: Sort the final results
+            {
+                $sort: { name: 1 }
+            }
+        ];
+
+        const monitoredSites = await devicesCollection.aggregate(aggregationPipeline).toArray();
         res.json(monitoredSites);
+
     } catch(error) { 
         console.error("Error fetching monitored devices:", error);
         res.status(500).json([]); 
     }
 });
 
-
-// --- Video Routes ---
 router.use('/video', videoRoutes);
 
-
-// --- Devices (Master Roster) ---
 router.get('/devices', async (req, res) => {
     const devicesCollection = getDb().collection('devices');
     res.json(await devicesCollection.find().sort({ name: 1 }).toArray());
@@ -200,8 +213,6 @@ router.put('/devices/:id/profile', async (req, res) => {
     res.json({ success: true });
 });
 
-
-// --- Alerts ---
 router.get('/alerts/history', async (req, res) => {
     const alertsCollection = getDb().collection('alerts');
     const { startDate, endDate, siteId } = req.query;
@@ -244,7 +255,6 @@ router.post('/alerts/:id/notes', async (req, res) => {
     res.json({ success: true, alert: updatedAlert });
 });
 
-// --- Schedules ---
 router.get('/schedules', async (req, res) => {
     const schedulesCollection = getDb().collection('schedules');
     res.json(await schedulesCollection.find().toArray());
@@ -272,7 +282,6 @@ router.delete('/schedules/:id', async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Schedule Assignments ---
 router.get('/schedule-assignments', async (req, res) => {
     const settingsCollection = getDb().collection('settings');
     res.json(await settingsCollection.findOne({ name: 'scheduleAssignments' }) || { assignments: {} });
@@ -284,7 +293,6 @@ router.post('/schedule-assignments', async (req, res) => {
     res.json({ success: true });
 });
 
-// --- System Settings ---
 router.get('/settings', async (req, res) => {
     const settingsCollection = getDb().collection('settings');
     res.json(await settingsCollection.findOne({ _id: 'global_settings' }) || {});
@@ -297,7 +305,6 @@ router.put('/settings', async (req, res) => {
     res.json({ success: true });
 });
 
-// --- User Management ---
 router.get('/users', async (req, res) => {
     const usersCollection = getDb().collection('users');
     res.json(await usersCollection.find({}, { projection: { password: 0 } }).toArray());
@@ -334,7 +341,6 @@ router.delete('/users/:userId', async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Dispatch Groups ---
 router.get('/dispatch-groups', async (req, res) => {
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     res.json(await dispatchGroupsCollection.find().sort({ name: 1 }).toArray());
