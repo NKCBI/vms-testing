@@ -9,7 +9,6 @@ const TURING_API_BASE_URL = 'https://app.turingvideo.com/openapi';
  */
 async function syncWithTuringAPI() {
     const systemSettings = getSystemSettings();
-    // --- CHANGE 1: Check for the new `turingApiTokens` array instead of the single token ---
     if (!Array.isArray(systemSettings.turingApiTokens) || systemSettings.turingApiTokens.length === 0) {
         console.log('[SYNC] Aborted: No Turing API tokens are set in settings.');
         return;
@@ -21,11 +20,9 @@ async function syncWithTuringAPI() {
     const devicesCollection = db.collection('devices');
     const allSitesFromAllAccounts = {};
 
-    // --- CHANGE 2: Loop through each token and fetch data for each account ---
     for (const token of TURING_ACCESS_TOKENS) {
         console.log('[SYNC] Fetching data for a new token...');
         
-        // Helper to recursively get site names from the tree structure
         const flattenSites = (sites, flatMap) => {
             for (const site of sites) {
                 flatMap.set(site.id, site.name);
@@ -44,7 +41,6 @@ async function syncWithTuringAPI() {
             }
         } catch (error) { console.error("[SYNC] Could not fetch site list for a token.", error); }
 
-        // Fetch all cameras with pagination for the current token
         let allCamerasFromAPI = [];
         let hasMore = true;
         let offset = 0;
@@ -61,7 +57,7 @@ async function syncWithTuringAPI() {
             } catch (error) { console.error("[SYNC] Failed to fetch cameras for a token.", error); hasMore = false; }
         }
         
-        // Process cameras and sites for the current token
+        // --- FIX: This loop now correctly MERGES cameras into the single `allSitesFromAllAccounts` object ---
         for (const camera of allCamerasFromAPI) {
             if (!allSitesFromAllAccounts[camera.site_id]) {
                 allSitesFromAllAccounts[camera.site_id] = { 
@@ -70,22 +66,20 @@ async function syncWithTuringAPI() {
                     cameras: [] 
                 };
             }
-            // --- CHANGE 3: Store the token used to fetch this camera directly on the camera object ---
             allSitesFromAllAccounts[camera.site_id].cameras.push({ 
                 id: camera.id, 
                 name: camera.name, 
-                isMonitored: false,
                 turingApiToken: token // Store the token
             });
         }
         console.log(`[SYNC] Found ${allCamerasFromAPI.length} cameras for this token.`);
     }
 
-    // --- CHANGE 4: The rest of the logic now uses the aggregated data from all accounts ---
     const existingDevices = await devicesCollection.find({}).toArray();
     const existingDevicesMap = new Map(existingDevices.map(d => [d._id, d]));
     const bulkOps = [];
 
+    // --- FIX: This loop now runs AFTER all accounts have been fetched and aggregated ---
     for (const siteIdStr in allSitesFromAllAccounts) {
         const siteId = parseInt(siteIdStr);
         const siteFromAPI = allSitesFromAllAccounts[siteId];
@@ -99,7 +93,7 @@ async function syncWithTuringAPI() {
 
         const updatedCameras = siteFromAPI.cameras.map(cameraFromAPI => {
             const existingCamera = existingSite?.cameras.find(c => c.id === cameraFromAPI.id);
-            // Preserve monitoring status but update name and ensure token is present
+            // This now correctly preserves the monitoring status from the database against the full list of cameras
             return { 
                 id: cameraFromAPI.id, 
                 name: cameraFromAPI.name, 
@@ -123,6 +117,7 @@ async function syncWithTuringAPI() {
     if (bulkOps.length > 0) await devicesCollection.bulkWrite(bulkOps);
     console.log(`[SYNC] Synchronization with Turing API complete for all accounts.`);
 }
+
 
 /**
  * Initializes the synchronization process on server start and schedules it to run periodically.
