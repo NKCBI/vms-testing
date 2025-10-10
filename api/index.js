@@ -73,48 +73,36 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             return res.status(200).send('Alert ignored: camera not monitored.');
         }
 
-        // --- NEW: SCHEDULE CHECKING LOGIC ---
         const settingsCollection = db.collection('settings');
         const schedulesCollection = db.collection('schedules');
-
-        // 1. Find the camera's schedule assignment
         const assignmentsDoc = await settingsCollection.findOne({ name: 'scheduleAssignments' });
         const scheduleId = assignmentsDoc?.assignments?.[cameraId];
-
         let isWithinSchedule = false;
 
-        // 2. If the camera is assigned to a schedule, check the time
         if (scheduleId) {
             const schedule = await schedulesCollection.findOne({ _id: new ObjectId(scheduleId) });
             if (schedule) {
                 const now = new Date();
-                const dayOfWeek = now.getDay(); // Sunday = 0, Monday = 1, ...
-                const currentTime = now.toTimeString().slice(0, 5); // "HH:mm" format
-
-                const todaySchedule = schedule.days[dayOfWeek]; // Get today's time blocks
+                const dayOfWeek = now.getDay();
+                const currentTime = now.toTimeString().slice(0, 5);
+                const todaySchedule = schedule.days[dayOfWeek];
                 if (todaySchedule && todaySchedule.length > 0) {
                     for (const block of todaySchedule) {
                         if (currentTime >= block.startTime && currentTime <= block.endTime) {
                             isWithinSchedule = true;
-                            break; // Exit loop once we find a matching block
+                            break;
                         }
                     }
                 }
-                // If there are no blocks for today, isWithinSchedule remains false
             }
-            // If scheduleId exists but the schedule document isn't found, isWithinSchedule remains false
         } else {
-            // If the camera is NOT on any schedule, we consider it active 24/7 (as long as isMonitored is true)
             isWithinSchedule = true;
         }
 
-        // 3. If the camera is on a schedule but the current time is outside of any active block, ignore the alert.
         if (!isWithinSchedule) {
             console.log(`[Webhook] Alert ignored for camera ${cameraId}: outside of scheduled monitoring time.`);
             return res.status(200).send('Alert ignored: outside of schedule.');
         }
-        // --- END OF SCHEDULE CHECKING LOGIC ---
-
 
         const group = await dispatchGroupsCollection.findOne({ siteIds: device._id });
         const targetGroupId = group ? group._id : 'general';
@@ -182,7 +170,30 @@ router.post('/auth/login', async (req, res) => {
     }
 });
 
-router.use(authenticateToken); 
+router.use(authenticateToken);
+
+router.post('/alerts/resolve-all', async (req, res) => {
+    if (req.user.role !== 'Administrator') {
+        return res.status(403).json({ message: 'Forbidden: Only administrators can resolve all alerts.' });
+    }
+
+    try {
+        const db = getDb();
+        const alertsCollection = db.collection('alerts');
+        
+        const result = await alertsCollection.updateMany(
+            { status: { $ne: 'Resolved' } },
+            { $set: { status: 'Resolved' } }
+        );
+
+        console.log(`[ADMIN] Mass resolved ${result.modifiedCount} active alerts.`);
+        res.json({ success: true, message: `Successfully resolved ${result.modifiedCount} active alerts.` });
+
+    } catch (error) {
+        console.error("Error resolving active alerts:", error);
+        res.status(500).json({ message: 'An error occurred while resolving alerts.' });
+    }
+});
 
 router.get('/alerts/active', async (req, res) => {
     try {
