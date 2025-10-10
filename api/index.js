@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const { getDb } = require('../database');
-// const authenticateToken = require('../middleware/auth');
+const authenticateToken = require('../middleware/auth');
 const { loadSystemSettings, getSystemSettings } = require('../services/settings');
 const videoRoutes = require('./video'); 
 
@@ -143,8 +143,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     }
 });
 
-// ... (the rest of the file is unchanged) ...
-
 router.use(express.json());
 
 router.get('/status', (req, res) => {
@@ -181,6 +179,44 @@ router.post('/auth/login', async (req, res) => {
     } catch (error) {
         console.error("Login error:", error);
         res.status(500).json({ error: 'An internal server error occurred.' });
+    }
+});
+
+router.use(authenticateToken); 
+
+router.get('/alerts/active', async (req, res) => {
+    try {
+        const db = getDb();
+        const { role, dispatchGroupId } = req.user;
+        const alertsCollection = db.collection('alerts');
+        
+        const filter = { status: { $ne: 'Resolved' } };
+
+        if (role === 'Dispatcher') {
+            const dispatchGroupsCollection = db.collection('dispatchGroups');
+            let siteIds = [];
+
+            if (dispatchGroupId) {
+                const group = await dispatchGroupsCollection.findOne({ _id: new ObjectId(dispatchGroupId) });
+                if (group) {
+                    siteIds = group.siteIds;
+                }
+            } else {
+                const allGroupedSiteIds = await dispatchGroupsCollection.distinct('siteIds');
+                const devicesCollection = db.collection('devices');
+                const unassignedSites = await devicesCollection.find({ _id: { $nin: allGroupedSiteIds } }).project({ _id: 1 }).toArray();
+                siteIds = unassignedSites.map(site => site._id);
+            }
+            
+            filter['siteProfile._id'] = { $in: siteIds };
+        }
+
+        const activeAlerts = await alertsCollection.find(filter).sort({ createdAt: -1 }).toArray();
+        res.json(activeAlerts);
+
+    } catch (error) {
+        console.error("Error fetching active alerts:", error);
+        res.status(500).json([]);
     }
 });
 
