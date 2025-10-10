@@ -297,9 +297,11 @@ router.get('/alerts/history', async (req, res) => {
     res.json(await alertsCollection.find(filter).sort({ createdAt: -1 }).limit(500).toArray());
 });
 
+
 router.post('/alerts/:id/status', async (req, res) => {
     const alertsCollection = getDb().collection('alerts');
-    const dispatchGroupsCollection = db.collection('dispatchGroups');
+    // --- FIX: Changed db.collection to getDb().collection ---
+    const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { status } = req.body;
     const { username } = req.user;
@@ -330,7 +332,8 @@ router.post('/alerts/:id/status', async (req, res) => {
 
 router.post('/alerts/:id/notes', async (req, res) => {
     const alertsCollection = getDb().collection('alerts');
-    const dispatchGroupsCollection = db.collection('dispatchGroups');
+    // --- FIX: Changed db.collection to getDb().collection ---
+    const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { noteText } = req.body;
     const { username } = req.user;
