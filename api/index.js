@@ -11,6 +11,7 @@ const videoRoutes = require('./video');
 const router = express.Router();
 
 const processedAlertIds = new Set();
+const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // --- Webhook (Public Route) ---
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -87,12 +88,24 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             console.log(`[SCHEDULE TRACE] Camera is assigned to Schedule ID: ${scheduleId}`);
             const schedule = await schedulesCollection.findOne({ _id: new ObjectId(scheduleId) });
             if (schedule) {
+                const { timezone } = getSystemSettings();
                 const now = new Date();
-                const dayOfWeek = now.getDay(); // Sunday=0, Monday=1, etc.
-                const currentTime = now.toTimeString().slice(0, 5); // "HH:mm"
                 
-                console.log(`[SCHEDULE TRACE] Current Time (Server): ${currentTime}`);
-                console.log(`[SCHEDULE TRACE] Current Day (Server): ${dayOfWeek} (Sunday is 0)`);
+                const formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: timezone || 'UTC', // Fallback to UTC
+                    weekday: 'long',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: false,
+                });
+
+                const parts = formatter.formatToParts(now);
+                const dayString = parts.find(p => p.type === 'weekday').value;
+                const dayOfWeek = DAYS_OF_WEEK.indexOf(dayString);
+                const currentTime = `${parts.find(p => p.type === 'hour').value}:${parts.find(p => p.type === 'minute').value}`;
+
+                console.log(`[SCHEDULE TRACE] Current Time (${timezone || 'UTC'}): ${currentTime}`);
+                console.log(`[SCHEDULE TRACE] Current Day (${timezone || 'UTC'}): ${dayOfWeek} (${dayString})`);
 
                 const todaySchedule = schedule.days[dayOfWeek];
                 if (todaySchedule && todaySchedule.length > 0) {

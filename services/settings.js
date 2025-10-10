@@ -5,6 +5,7 @@ const { getDb } = require('../database');
 let systemSettings = {
     turingApiToken: null,
     webhookSecret: null,
+    timezone: 'UTC', // Default to UTC
 };
 
 /**
