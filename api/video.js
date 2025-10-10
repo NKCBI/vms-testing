@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-const { getDb } = require('../database'); // <-- Import getDb
+const { getDb } = require('../database');
 const { getSystemSettings } = require('../services/settings');
 
 const router = express.Router();
@@ -14,7 +14,6 @@ router.post('/rtsp-url', async (req, res) => {
         return res.status(400).json({ message: 'camera_id is required.' });
     }
 
-    // --- MODIFICATION START ---
     let turingAccessToken;
     try {
         const db = getDb();
@@ -39,7 +38,6 @@ router.post('/rtsp-url', async (req, res) => {
         console.error('[RTSP] Database error while retrieving camera token:', dbError);
         return res.status(500).json({ message: 'Failed to retrieve camera configuration.' });
     }
-    // --- MODIFICATION END ---
     
     const settings = getSystemSettings();
     const turingApiUrl = settings.turingApiUrl || 'https://app.turingvideo.com/openapi';
@@ -71,16 +69,12 @@ router.post('/rtsp-url', async (req, res) => {
     }
 });
 
-// ... rest of the file remains the same ...
-// ... /start-stream and /stream routes ...
-
 // This route is called by the frontend to tell MediaMTX to start pulling the RTSP stream.
 router.post('/start-stream', async (req, res) => {
     const { pathName, rtspUrl } = req.body;
     console.log(`[MediaMTX] Start-stream request for path: ${pathName}`);
     
     const baseMtxUrl = process.env.MEDIAMTX_API_URL || `http://localhost:9997/v3`;
-    // --- FIX: Sanitize the URL to remove any trailing slashes ---
     const mediaMtxApiUrl = baseMtxUrl.replace(/\/$/, '');
 
     try {
@@ -95,7 +89,7 @@ router.post('/start-stream', async (req, res) => {
                 console.log(`[MediaMTX] Path '${pathName}' does not exist yet.`);
             } else {
                 console.error(`[MediaMTX] Error checking for path '${pathName}':`, error.response ? error.response.data : error.message);
-                throw error; // Re-throw unexpected errors.
+                throw error;
             }
         }
 
@@ -110,7 +104,8 @@ router.post('/start-stream', async (req, res) => {
             const payload = {
                 source: rtspUrl,
                 sourceOnDemand: true,
-                sourceOnDemandCloseAfter: '20s',
+                // --- FIX: Increased the timeout to make the stream more stable ---
+                sourceOnDemandCloseAfter: '60s',
                 rtspTransport: 'tcp'
             };
             await axios.post(`${mediaMtxApiUrl}/config/paths/add/${pathName}`, payload);
@@ -123,13 +118,10 @@ router.post('/start-stream', async (req, res) => {
     }
 });
 
-// NOTE: This /stream route seems to duplicate the PATCH logic from /start-stream.
-// It can likely be removed later for simplification, but we will fix it for now.
 router.patch('/stream', async (req, res) => {
     const { pathName, rtspUrl } = req.body;
     
     const baseMtxUrl = process.env.MEDIAMTX_API_URL || `http://localhost:9997/v3`;
-    // --- FIX: Sanitize the URL to remove any trailing slashes ---
     const mediaMtxApiUrl = baseMtxUrl.replace(/\/$/, '');
 
     try {
