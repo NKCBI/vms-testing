@@ -73,36 +73,59 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             return res.status(200).send('Alert ignored: camera not monitored.');
         }
 
+        // --- ENHANCED LOGGING: SCHEDULE CHECKING LOGIC ---
         const settingsCollection = db.collection('settings');
         const schedulesCollection = db.collection('schedules');
         const assignmentsDoc = await settingsCollection.findOne({ name: 'scheduleAssignments' });
         const scheduleId = assignmentsDoc?.assignments?.[cameraId];
+        
         let isWithinSchedule = false;
+        console.log(`\n--- [SCHEDULE TRACE] ---`);
+        console.log(`[SCHEDULE TRACE] Camera ID: ${cameraId}`);
 
         if (scheduleId) {
+            console.log(`[SCHEDULE TRACE] Camera is assigned to Schedule ID: ${scheduleId}`);
             const schedule = await schedulesCollection.findOne({ _id: new ObjectId(scheduleId) });
             if (schedule) {
                 const now = new Date();
-                const dayOfWeek = now.getDay();
-                const currentTime = now.toTimeString().slice(0, 5);
+                const dayOfWeek = now.getDay(); // Sunday=0, Monday=1, etc.
+                const currentTime = now.toTimeString().slice(0, 5); // "HH:mm"
+                
+                console.log(`[SCHEDULE TRACE] Current Time (Server): ${currentTime}`);
+                console.log(`[SCHEDULE TRACE] Current Day (Server): ${dayOfWeek} (Sunday is 0)`);
+
                 const todaySchedule = schedule.days[dayOfWeek];
                 if (todaySchedule && todaySchedule.length > 0) {
+                    console.log(`[SCHEDULE TRACE] Found ${todaySchedule.length} time block(s) for today:`, todaySchedule);
                     for (const block of todaySchedule) {
+                        console.log(`[SCHEDULE TRACE]   - Checking block: ${block.startTime} to ${block.endTime}`);
                         if (currentTime >= block.startTime && currentTime <= block.endTime) {
                             isWithinSchedule = true;
+                            console.log(`[SCHEDULE TRACE]   - MATCH FOUND. Current time is within this block.`);
                             break;
+                        } else {
+                            console.log(`[SCHEDULE TRACE]   - No match.`);
                         }
                     }
+                } else {
+                    console.log(`[SCHEDULE TRACE] No time blocks found for today.`);
                 }
+            } else {
+                console.log(`[SCHEDULE TRACE] ERROR: Schedule document with ID ${scheduleId} not found in database.`);
             }
         } else {
-            isWithinSchedule = true;
+            console.log(`[SCHEDULE TRACE] Camera is not assigned to any schedule.`);
         }
 
         if (!isWithinSchedule) {
-            console.log(`[Webhook] Alert ignored for camera ${cameraId}: outside of scheduled monitoring time.`);
+            console.log(`[SCHEDULE TRACE] FINAL DECISION: Alert is OUTSIDE of scheduled time. Ignoring.`);
+            console.log(`--- [END SCHEDULE TRACE] ---\n`);
             return res.status(200).send('Alert ignored: outside of schedule.');
         }
+        
+        console.log(`[SCHEDULE TRACE] FINAL DECISION: Alert is WITHIN scheduled time. Processing.`);
+        console.log(`--- [END SCHEDULE TRACE] ---\n`);
+        // --- END OF LOGGING ---
 
         const group = await dispatchGroupsCollection.findOne({ siteIds: device._id });
         const targetGroupId = group ? group._id : 'general';
@@ -119,8 +142,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
         
         if (req.broadcastToGroup) {
             req.broadcastToGroup(targetGroupId, { type: 'new_alert', alert: { _id: result.insertedId, ...newAlertDocument } });
-        } else {
-            console.warn('[Webhook] broadcastToGroup function not available on request object.');
         }
         
         console.log(`[Webhook] Successfully processed event_id: ${alertData.event_id}. Inserted DB ID: ${result.insertedId}.`);
