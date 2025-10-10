@@ -14,6 +14,7 @@ const processedAlertIds = new Set();
 
 // --- Webhook (Public Route) ---
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+    // ... (webhook logic is unchanged)
     console.log(`[Webhook] Received a request at ${new Date().toISOString()}`);
 
     const systemSettings = getSystemSettings();
@@ -170,9 +171,10 @@ router.post('/auth/login', async (req, res) => {
     }
 });
 
-router.use(authenticateToken);
+router.use(authenticateToken); 
 
 router.post('/alerts/resolve-all', async (req, res) => {
+    // ... (this route is unchanged) ...
     if (req.user.role !== 'Administrator') {
         return res.status(403).json({ message: 'Forbidden: Only administrators can resolve all alerts.' });
     }
@@ -196,6 +198,7 @@ router.post('/alerts/resolve-all', async (req, res) => {
 });
 
 router.get('/alerts/active', async (req, res) => {
+    // ... (this route is unchanged) ...
     try {
         const db = getDb();
         const { role, dispatchGroupId } = req.user;
@@ -232,6 +235,7 @@ router.get('/alerts/active', async (req, res) => {
 });
 
 router.get('/monitored-devices', async (req, res) => {
+    // ... (this route is unchanged) ...
     try {
         const db = getDb();
         const devicesCollection = db.collection('devices');
@@ -256,23 +260,27 @@ router.get('/monitored-devices', async (req, res) => {
 router.use('/video', videoRoutes);
 
 router.get('/devices', async (req, res) => {
+    // ... (this route is unchanged) ...
     const devicesCollection = getDb().collection('devices');
     res.json(await devicesCollection.find().sort({ name: 1 }).toArray());
 });
 
 router.put('/cameras/:id/monitor', async (req, res) => {
+    // ... (this route is unchanged) ...
     const devicesCollection = getDb().collection('devices');
     await devicesCollection.updateOne({ "cameras.id": parseInt(req.params.id) }, { $set: { "cameras.$.isMonitored": req.body.isMonitored } });
     res.json({ success: true });
 });
 
 router.put('/sites/:siteId/monitor-all', async (req, res) => {
+    // ... (this route is unchanged) ...
     const devicesCollection = getDb().collection('devices');
     await devicesCollection.updateOne({ _id: parseInt(req.params.siteId) }, { $set: { "cameras.$[].isMonitored": req.body.isMonitored } });
     res.json({ success: true });
 });
 
 router.put('/devices/:id/profile', async (req, res) => {
+    // ... (this route is unchanged) ...
     const devicesCollection = getDb().collection('devices');
     const { _id, name, cameras, ...profileData } = req.body;
     await devicesCollection.updateOne({ _id: parseInt(req.params.id) }, { $set: { ...profileData, isConfigured: true } });
@@ -280,6 +288,7 @@ router.put('/devices/:id/profile', async (req, res) => {
 });
 
 router.get('/alerts/history', async (req, res) => {
+    // ... (this route is unchanged) ...
     const alertsCollection = getDb().collection('alerts');
     const { startDate, endDate, siteId } = req.query;
     let filter = {};
@@ -288,38 +297,70 @@ router.get('/alerts/history', async (req, res) => {
     res.json(await alertsCollection.find(filter).sort({ createdAt: -1 }).limit(500).toArray());
 });
 
+// --- MODIFICATION: Log user who changed the status ---
 router.post('/alerts/:id/status', async (req, res) => {
     const alertsCollection = getDb().collection('alerts');
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { status } = req.body;
+    const { username } = req.user; // Get username from the token
     const objectId = new ObjectId(id);
-    await alertsCollection.updateOne({ _id: objectId }, { $set: { status, updatedAt: new Date() } });
+
+    // Create a note to log the action
+    const statusChangeNote = { 
+        username: username, 
+        text: `Status changed to ${status}`, 
+        timestamp: new Date() 
+    };
+    
+    // Perform both updates in one operation
+    await alertsCollection.updateOne(
+        { _id: objectId }, 
+        { 
+            $set: { status, updatedAt: new Date() },
+            $push: { notes: statusChangeNote } 
+        }
+    );
+
     const updatedAlert = await alertsCollection.findOne({ _id: objectId });
     const group = await dispatchGroupsCollection.findOne({ siteIds: updatedAlert.siteProfile._id });
     const targetGroupId = group ? group._id : 'general';
+
     if (req.broadcastToGroup) {
        req.broadcastToGroup(targetGroupId, { type: 'update_alert', alert: updatedAlert });
     }
     res.json({ success: true, alert: updatedAlert });
 });
 
+// --- MODIFICATION: Log user who added the note ---
 router.post('/alerts/:id/notes', async (req, res) => {
     const alertsCollection = getDb().collection('alerts');
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { noteText } = req.body;
-    const note = { username: 'System', text: noteText, timestamp: new Date() };
+    const { username } = req.user; // Get username from the token
+
+    const note = { 
+        username: username, // Use the actual username
+        text: noteText, 
+        timestamp: new Date() 
+    };
+    
     const objectId = new ObjectId(id);
     await alertsCollection.updateOne({ _id: objectId }, { $push: { notes: note } });
+
     const updatedAlert = await alertsCollection.findOne({ _id: objectId });
     const group = await dispatchGroupsCollection.findOne({ siteIds: updatedAlert.siteProfile._id });
     const targetGroupId = group ? group._id : 'general';
+
     if (req.broadcastToGroup) {
         req.broadcastToGroup(targetGroupId, { type: 'update_alert', alert: updatedAlert });
     }
     res.json({ success: true, alert: updatedAlert });
 });
+
+
+// ... (The rest of the file is unchanged) ...
 
 router.get('/schedules', async (req, res) => {
     const schedulesCollection = getDb().collection('schedules');

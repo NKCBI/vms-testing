@@ -5,7 +5,7 @@ const { getSystemSettings } = require('./settings');
 const TURING_API_BASE_URL = 'https://app.turingvideo.com/openapi';
 
 /**
- * Performs the main synchronization logic with the Turing API for multiple accounts.
+ * Performs the main synchronization logic with the Turing API.
  */
 async function syncWithTuringAPI() {
     const systemSettings = getSystemSettings();
@@ -57,7 +57,6 @@ async function syncWithTuringAPI() {
             } catch (error) { console.error("[SYNC] Failed to fetch cameras for a token.", error); hasMore = false; }
         }
         
-        // --- FIX: This loop now correctly MERGES cameras into the single `allSitesFromAllAccounts` object ---
         for (const camera of allCamerasFromAPI) {
             if (!allSitesFromAllAccounts[camera.site_id]) {
                 allSitesFromAllAccounts[camera.site_id] = { 
@@ -69,7 +68,7 @@ async function syncWithTuringAPI() {
             allSitesFromAllAccounts[camera.site_id].cameras.push({ 
                 id: camera.id, 
                 name: camera.name, 
-                turingApiToken: token // Store the token
+                turingApiToken: token
             });
         }
         console.log(`[SYNC] Found ${allCamerasFromAPI.length} cameras for this token.`);
@@ -79,12 +78,12 @@ async function syncWithTuringAPI() {
     const existingDevicesMap = new Map(existingDevices.map(d => [d._id, d]));
     const bulkOps = [];
 
-    // --- FIX: This loop now runs AFTER all accounts have been fetched and aggregated ---
     for (const siteIdStr in allSitesFromAllAccounts) {
         const siteId = parseInt(siteIdStr);
         const siteFromAPI = allSitesFromAllAccounts[siteId];
         const existingSite = existingDevicesMap.get(siteId);
 
+        // --- FIX: Added the missing 'pertinent_info' field ---
         let profileData = existingSite ? {
             account_number: existingSite.account_number,
             district: existingSite.district,
@@ -93,7 +92,6 @@ async function syncWithTuringAPI() {
 
         const updatedCameras = siteFromAPI.cameras.map(cameraFromAPI => {
             const existingCamera = existingSite?.cameras.find(c => c.id === cameraFromAPI.id);
-            // This now correctly preserves the monitoring status from the database against the full list of cameras
             return { 
                 id: cameraFromAPI.id, 
                 name: cameraFromAPI.name, 
