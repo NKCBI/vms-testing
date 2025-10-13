@@ -13,68 +13,9 @@ const router = express.Router();
 const processedAlertIds = new Set();
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-// --- Webhook (Public Route) ---
-router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-    // ... (webhook logic remains the same)
-});
+// --- PUBLIC ROUTES (No Authentication Required) ---
 
-router.use(express.json());
-
-router.get('/status', (req, res) => {
-    res.status(200).json({ status: 'ok', message: 'Server is running.' });
-});
-
-router.post('/auth/login', async (req, res) => {
-    // ... (login logic remains the same)
-});
-
-// --- NEW ENDPOINT: Change password for the logged-in user ---
-router.post('/auth/change-password', authenticateToken, async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-    const { userId } = req.user; // Get userId from the authenticated token
-
-    if (!currentPassword || !newPassword || newPassword.length < 6) {
-        return res.status(400).json({ message: 'New password must be at least 6 characters long.' });
-    }
-
-    try {
-        const db = getDb();
-        const usersCollection = db.collection('users');
-        const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
-
-        if (!user) {
-            return res.status(404).json({ message: 'User not found.' });
-        }
-
-        // Verify the current password
-        const isValid = await bcrypt.compare(currentPassword, user.password);
-        if (!isValid) {
-            return res.status(401).json({ message: 'Incorrect current password.' });
-        }
-
-        // Hash the new password and update the database
-        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-        await usersCollection.updateOne(
-            { _id: new ObjectId(userId) },
-            { $set: { password: hashedNewPassword } }
-        );
-
-        console.log(`[AUTH] User ${user.username} successfully changed their password.`);
-        res.json({ success: true, message: 'Password updated successfully.' });
-
-    } catch (error) {
-        console.error("Error changing password:", error);
-        res.status(500).json({ message: 'An internal server error occurred.' });
-    }
-});
-
-
-router.use(authenticateToken);
-
-// ... (rest of the API routes remain the same)
-
-// (The full file content of all other routes would follow here, but is omitted for brevity)
-// Webhook (Public Route)
+// Webhook endpoint uses a raw body parser
 router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
     console.log(`[Webhook] Received a request at ${new Date().toISOString()}`);
 
@@ -196,7 +137,97 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     }
 });
 
+// Add the JSON body parser for all subsequent routes
+router.use(express.json());
 
+// Public status check
+router.get('/status', (req, res) => {
+    res.status(200).json({ status: 'ok', message: 'Server is running.' });
+});
+
+// Public login route
+router.post('/auth/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
+        const db = getDb();
+        const usersCollection = db.collection('users');
+        const user = await usersCollection.findOne({ username });
+
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const isValid = await bcrypt.compare(password, user.password);
+        if (!isValid) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const tokenPayload = { 
+            userId: user._id, 
+            username: user.username, 
+            role: user.role, 
+            dispatchGroupId: user.dispatchGroupId,
+        };
+
+        const token = jwt.sign(tokenPayload, process.env.JWT_SECRET, { expiresIn: '8h' });
+        
+        const userResponse = {
+            username: user.username,
+            role: user.role,
+            dispatchGroupId: user.dispatchGroupId,
+        };
+
+        res.json({ token, user: userResponse });
+    } catch (error) {
+        console.error("Login error:", error);
+        res.status(500).json({ error: 'An internal server error occurred.' });
+    }
+});
+
+
+// --- PROTECTED ROUTES ---
+// All routes defined below this line require a valid JWT.
+router.use(authenticateToken);
+
+// Change password for the logged-in user
+router.post('/auth/change-password', async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const { userId } = req.user;
+
+    if (!currentPassword || !newPassword || newPassword.length < 6) {
+        return res.status(400).json({ message: 'New password must be at least 6 characters long.' });
+    }
+
+    try {
+        const db = getDb();
+        const usersCollection = db.collection('users');
+        const user = await usersCollection.findOne({ _id: new ObjectId(userId) });
+
+        if (!user) {
+            return res.status(404).json({ message: 'User not found.' });
+        }
+
+        const isValid = await bcrypt.compare(currentPassword, user.password);
+        if (!isValid) {
+            return res.status(401).json({ message: 'Incorrect current password.' });
+        }
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+        await usersCollection.updateOne(
+            { _id: new ObjectId(userId) },
+            { $set: { password: hashedNewPassword } }
+        );
+
+        console.log(`[AUTH] User ${user.username} successfully changed their password.`);
+        res.json({ success: true, message: 'Password updated successfully.' });
+    } catch (error) {
+        console.error("Error changing password:", error);
+        res.status(500).json({ message: 'An internal server error occurred.' });
+    }
+});
+
+
+// --- The rest of the protected routes ---
 
 router.post('/cameras/:cameraId/sleep', async (req, res) => {
     if (req.user.role !== 'Administrator') {
@@ -222,7 +253,6 @@ router.post('/cameras/:cameraId/sleep', async (req, res) => {
     }
 });
 
-
 router.post('/cameras/:cameraId/wakeup', async (req, res) => {
     if (req.user.role !== 'Administrator') {
         return res.status(403).json({ message: 'Forbidden' });
@@ -245,21 +275,15 @@ router.post('/alerts/resolve-all', async (req, res) => {
     if (req.user.role !== 'Administrator') {
         return res.status(403).json({ message: 'Forbidden: Only administrators can resolve all alerts.' });
     }
-
     try {
         const db = getDb();
         const alertsCollection = db.collection('alerts');
-        
         const result = await alertsCollection.updateMany(
             { status: { $ne: 'Resolved' } },
             { $set: { status: 'Resolved' } }
         );
-
-        console.log(`[ADMIN] Mass resolved ${result.modifiedCount} active alerts.`);
         res.json({ success: true, message: `Successfully resolved ${result.modifiedCount} active alerts.` });
-
     } catch (error) {
-        console.error("Error resolving active alerts:", error);
         res.status(500).json({ message: 'An error occurred while resolving alerts.' });
     }
 });
@@ -269,33 +293,25 @@ router.get('/alerts/active', async (req, res) => {
         const db = getDb();
         const { role, dispatchGroupId } = req.user;
         const alertsCollection = db.collection('alerts');
-        
         const filter = { status: { $ne: 'Resolved' } };
 
         if (role === 'Dispatcher') {
             const dispatchGroupsCollection = db.collection('dispatchGroups');
             let siteIds = [];
-
             if (dispatchGroupId) {
                 const group = await dispatchGroupsCollection.findOne({ _id: new ObjectId(dispatchGroupId) });
-                if (group) {
-                    siteIds = group.siteIds;
-                }
+                if (group) siteIds = group.siteIds;
             } else {
                 const allGroupedSiteIds = await dispatchGroupsCollection.distinct('siteIds');
                 const devicesCollection = db.collection('devices');
                 const unassignedSites = await devicesCollection.find({ _id: { $nin: allGroupedSiteIds } }).project({ _id: 1 }).toArray();
                 siteIds = unassignedSites.map(site => site._id);
             }
-            
             filter['siteProfile._id'] = { $in: siteIds };
         }
-
         const activeAlerts = await alertsCollection.find(filter).sort({ createdAt: -1 }).toArray();
         res.json(activeAlerts);
-
     } catch (error) {
-        console.error("Error fetching active alerts:", error);
         res.status(500).json([]);
     }
 });
@@ -304,20 +320,13 @@ router.get('/monitored-devices', async (req, res) => {
     try {
         const db = getDb();
         const devicesCollection = db.collection('devices');
-        
-        const sitesWithMonitoredCameras = await devicesCollection.find({ 
-            "cameras.isMonitored": true 
-        }).sort({ name: 1 }).toArray();
-
+        const sitesWithMonitoredCameras = await devicesCollection.find({ "cameras.isMonitored": true }).sort({ name: 1 }).toArray();
         const monitoredSites = sitesWithMonitoredCameras.map(site => {
             const monitoredCameras = site.cameras.filter(camera => camera.isMonitored);
             return { ...site, cameras: monitoredCameras };
         });
-
         res.json(monitoredSites);
-
     } catch(error) { 
-        console.error("Error fetching monitored devices:", error);
         res.status(500).json([]); 
     }
 });
@@ -357,7 +366,6 @@ router.get('/alerts/history', async (req, res) => {
     res.json(await alertsCollection.find(filter).sort({ createdAt: -1 }).limit(500).toArray());
 });
 
-
 router.post('/alerts/:id/status', async (req, res) => {
     const alertsCollection = getDb().collection('alerts');
     const dispatchGroupsCollection = getDb().collection('dispatchGroups');
@@ -365,21 +373,8 @@ router.post('/alerts/:id/status', async (req, res) => {
     const { status } = req.body;
     const { username } = req.user;
     const objectId = new ObjectId(id);
-    
-    const statusChangeNote = { 
-        username: username, 
-        text: `Status changed to ${status}`, 
-        timestamp: new Date() 
-    };
-    
-    await alertsCollection.updateOne(
-        { _id: objectId }, 
-        { 
-            $set: { status, updatedAt: new Date() },
-            $push: { notes: statusChangeNote } 
-        }
-    );
-
+    const statusChangeNote = { username: username, text: `Status changed to ${status}`, timestamp: new Date() };
+    await alertsCollection.updateOne({ _id: objectId }, { $set: { status, updatedAt: new Date() }, $push: { notes: statusChangeNote } });
     const updatedAlert = await alertsCollection.findOne({ _id: objectId });
     const group = await dispatchGroupsCollection.findOne({ siteIds: updatedAlert.siteProfile._id });
     const targetGroupId = group ? group._id : 'general';
@@ -395,16 +390,9 @@ router.post('/alerts/:id/notes', async (req, res) => {
     const { id } = req.params;
     const { noteText } = req.body;
     const { username } = req.user;
-
-    const note = { 
-        username: username,
-        text: noteText, 
-        timestamp: new Date() 
-    };
-    
+    const note = { username: username, text: noteText, timestamp: new Date() };
     const objectId = new ObjectId(id);
     await alertsCollection.updateOne({ _id: objectId }, { $push: { notes: note } });
-
     const updatedAlert = await alertsCollection.findOne({ _id: objectId });
     const group = await dispatchGroupsCollection.findOne({ siteIds: updatedAlert.siteProfile._id });
     const targetGroupId = group ? group._id : 'general';
@@ -415,79 +403,61 @@ router.post('/alerts/:id/notes', async (req, res) => {
 });
 
 router.get('/schedules', async (req, res) => {
-    const schedulesCollection = getDb().collection('schedules');
-    res.json(await schedulesCollection.find().toArray());
+    res.json(await getDb().collection('schedules').find().toArray());
 });
 
 router.post('/schedules', async (req, res) => {
-    const schedulesCollection = getDb().collection('schedules');
     const { name, days } = req.body;
-    const result = await schedulesCollection.insertOne({ name, days });
+    const result = await getDb().collection('schedules').insertOne({ name, days });
     res.status(201).json({ success: true, schedule: { _id: result.insertedId, name, days } });
 });
 
 router.put('/schedules/:id', async (req, res) => {
-    const schedulesCollection = getDb().collection('schedules');
     const { id } = req.params;
     const scheduleData = req.body;
     delete scheduleData._id;
-    await schedulesCollection.updateOne({ _id: new ObjectId(id) }, { $set: scheduleData });
+    await getDb().collection('schedules').updateOne({ _id: new ObjectId(id) }, { $set: scheduleData });
     res.json({ success: true });
 });
 
 router.delete('/schedules/:id', async (req, res) => {
-    const schedulesCollection = getDb().collection('schedules');
-    await schedulesCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+    await getDb().collection('schedules').deleteOne({ _id: new ObjectId(req.params.id) });
     res.json({ success: true });
 });
 
 router.get('/schedule-assignments', async (req, res) => {
-    const settingsCollection = getDb().collection('settings');
-    res.json(await settingsCollection.findOne({ name: 'scheduleAssignments' }) || { assignments: {} });
+    res.json(await getDb().collection('settings').findOne({ name: 'scheduleAssignments' }) || { assignments: {} });
 });
 
 router.post('/schedule-assignments', async (req, res) => {
-    const settingsCollection = getDb().collection('settings');
-    await settingsCollection.updateOne({ name: 'scheduleAssignments' }, { $set: req.body }, { upsert: true });
+    await getDb().collection('settings').updateOne({ name: 'scheduleAssignments' }, { $set: req.body }, { upsert: true });
     res.json({ success: true });
 });
 
 router.get('/settings', async (req, res) => {
-    const settingsCollection = getDb().collection('settings');
-    res.json(await settingsCollection.findOne({ _id: 'global_settings' }) || {});
+    res.json(await getDb().collection('settings').findOne({ _id: 'global_settings' }) || {});
 });
 
 router.put('/settings', async (req, res) => {
-    const settingsCollection = getDb().collection('settings');
-    await settingsCollection.updateOne({ _id: 'global_settings' }, { $set: req.body }, { upsert: true });
+    await getDb().collection('settings').updateOne({ _id: 'global_settings' }, { $set: req.body }, { upsert: true });
     await loadSystemSettings();
     res.json({ success: true });
 });
 
 router.get('/users', async (req, res) => {
-    const usersCollection = getDb().collection('users');
-    res.json(await usersCollection.find({}, { projection: { password: 0 } }).toArray());
+    res.json(await getDb().collection('users').find({}, { projection: { password: 0 } }).toArray());
 });
 
 router.post('/users', async (req, res) => {
-    const usersCollection = getDb().collection('users');
     const { username, password, role, dispatchGroupId } = req.body;
     const hashedPassword = await bcrypt.hash(password, 10);
-    
-    const newUser = { 
-        username, 
-        password: hashedPassword, 
-        role, 
-        createdAt: new Date(),
-    };
-
+    const newUser = { username, password: hashedPassword, role, createdAt: new Date() };
     if (role === 'Dispatcher' && dispatchGroupId) newUser.dispatchGroupId = new ObjectId(dispatchGroupId);
-    const result = await usersCollection.insertOne(newUser);
+    const result = await getDb().collection('users').insertOne(newUser);
     res.status(201).json({ success: true, user: { _id: result.insertedId, username, role } });
 });
 
 router.put('/users/:userId', async (req, res) => {
-    const usersCollection = getDb().collection('users');
     const { userId } = req.params;
     const { username, password, role, dispatchGroupId } = req.body;
     const updateData = { username, role };
@@ -495,47 +465,39 @@ router.put('/users/:userId', async (req, res) => {
     if (role === 'Dispatcher' && dispatchGroupId) {
         updateData.dispatchGroupId = new ObjectId(dispatchGroupId);
     } else {
-        await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $unset: { dispatchGroupId: "" } });
+        await getDb().collection('users').updateOne({ _id: new ObjectId(userId) }, { $unset: { dispatchGroupId: "" } });
     }
-    await usersCollection.updateOne({ _id: new ObjectId(userId) }, { $set: updateData });
+    await getDb().collection('users').updateOne({ _id: new ObjectId(userId) }, { $set: updateData });
     res.json({ success: true });
 });
 
 router.delete('/users/:userId', async (req, res) => {
-    const usersCollection = getDb().collection('users');
-    await usersCollection.deleteOne({ _id: new ObjectId(req.params.userId) });
+    await getDb().collection('users').deleteOne({ _id: new ObjectId(req.params.userId) });
     res.json({ success: true });
 });
 
 router.get('/dispatch-groups', async (req, res) => {
-    const dispatchGroupsCollection = getDb().collection('dispatchGroups');
-    res.json(await dispatchGroupsCollection.find().sort({ name: 1 }).toArray());
+    res.json(await getDb().collection('dispatchGroups').find().sort({ name: 1 }).toArray());
 });
 
 router.post('/dispatch-groups', async (req, res) => {
-    const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { name, siteIds } = req.body;
-    const result = await dispatchGroupsCollection.insertOne({ name, siteIds: siteIds.map(id => parseInt(id)) });
+    const result = await getDb().collection('dispatchGroups').insertOne({ name, siteIds: siteIds.map(id => parseInt(id)) });
     res.status(201).json({ success: true, group: { _id: result.insertedId, name, siteIds } });
 });
 
 router.put('/dispatch-groups/:id', async (req, res) => {
-    const dispatchGroupsCollection = getDb().collection('dispatchGroups');
     const { id } = req.params;
     const { name, siteIds } = req.body;
-    await dispatchGroupsCollection.updateOne({ _id: new ObjectId(id) }, { $set: { name, siteIds: siteIds.map(id => parseInt(id)) } });
+    await getDb().collection('dispatchGroups').updateOne({ _id: new ObjectId(id) }, { $set: { name, siteIds: siteIds.map(id => parseInt(id)) } });
     res.json({ success: true });
 });
 
 router.delete('/dispatch-groups/:id', async (req, res) => {
-    const dispatchGroupsCollection = getDb().collection('dispatchGroups');
-    const usersCollection = getDb().collection('users');
     const { id } = req.params;
-    await dispatchGroupsCollection.deleteOne({ _id: new ObjectId(id) });
-    await usersCollection.updateMany({ dispatchGroupId: new ObjectId(id) }, { $unset: { dispatchGroupId: "" } });
+    await getDb().collection('dispatchGroups').deleteOne({ _id: new ObjectId(id) });
+    await getDb().collection('users').updateMany({ dispatchGroupId: new ObjectId(id) }, { $unset: { dispatchGroupId: "" } });
     res.json({ success: true });
 });
-
-
 
 module.exports = router;
