@@ -67,7 +67,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 
         const camera = device.cameras.find(c => c.id === cameraId);
 
-        // --- MODIFIED: Check for Sleep Mode on the specific camera ---
         if (camera && camera.isSleeping && camera.sleepExpiresAt && new Date() < new Date(camera.sleepExpiresAt)) {
             console.log(`[Webhook] Alert ignored for camera ${cameraId}: camera is in sleep mode.`);
             return res.status(200).send('Alert ignored: camera is sleeping.');
@@ -78,7 +77,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             return res.status(200).send('Alert ignored: camera not monitored.');
         }
 
-        // --- Schedule Check Logic (no changes needed here) ---
         const schedulesCollection = db.collection('schedules');
         const settingsCollection = db.collection('settings');
         const assignmentsDoc = await settingsCollection.findOne({ name: 'scheduleAssignments' });
@@ -114,7 +112,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
             return res.status(200).send('Alert ignored: outside of schedule.');
         }
         
-        // --- Alert Creation Logic (no changes needed here) ---
         const alertsCollection = db.collection('alerts');
         const dispatchGroupsCollection = db.collection('dispatchGroups');
         const group = await dispatchGroupsCollection.findOne({ siteIds: device._id });
@@ -139,8 +136,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
 });
 
 router.use(express.json());
-
-// ... (other routes like /status and /auth/login remain the same) ...
 
 router.get('/status', (req, res) => {
     res.status(200).json({ status: 'ok', message: 'Server is running.' });
@@ -187,48 +182,50 @@ router.post('/auth/login', async (req, res) => {
 
 router.use(authenticateToken);
 
-
-// --- NEW ENDPOINT: Put a specific camera to sleep ---
 router.post('/cameras/:cameraId/sleep', async (req, res) => {
     if (req.user.role !== 'Administrator') {
-        return res.status(403).json({ message: 'Forbidden: Only administrators can perform this action.' });
+        return res.status(403).json({ message: 'Forbidden' });
     }
-
     try {
         const cameraId = parseInt(req.params.cameraId);
         const { hours } = req.body;
-
         if (!hours || typeof hours !== 'number' || hours <= 0) {
             return res.status(400).json({ message: 'A positive number of hours is required.' });
         }
-
         const devicesCollection = getDb().collection('devices');
         const expirationDate = new Date();
         expirationDate.setHours(expirationDate.getHours() + hours);
-
         const result = await devicesCollection.updateOne(
             { "cameras.id": cameraId },
-            { 
-                $set: { 
-                    "cameras.$.isSleeping": true, 
-                    "cameras.$.sleepExpiresAt": expirationDate 
-                } 
-            }
+            { $set: { "cameras.$.isSleeping": true, "cameras.$.sleepExpiresAt": expirationDate } }
         );
-
-        if (result.matchedCount === 0) {
-            return res.status(404).json({ message: 'Camera not found.' });
-        }
-        
-        console.log(`[ADMIN] Camera ${cameraId} put to sleep for ${hours} hours. Expires at ${expirationDate.toISOString()}`);
+        if (result.matchedCount === 0) return res.status(404).json({ message: 'Camera not found.' });
         res.json({ success: true, message: `Camera will sleep until ${expirationDate.toLocaleString()}` });
     } catch (error) {
-        console.error("Error putting camera to sleep:", error);
-        res.status(500).json({ message: 'An error occurred while putting the camera to sleep.' });
+        res.status(500).json({ message: 'An error occurred.' });
     }
 });
 
-// ... (the rest of the file remains the same)
+// --- NEW ENDPOINT: Manually wake up a camera ---
+router.post('/cameras/:cameraId/wakeup', async (req, res) => {
+    if (req.user.role !== 'Administrator') {
+        return res.status(403).json({ message: 'Forbidden' });
+    }
+    try {
+        const cameraId = parseInt(req.params.cameraId);
+        const devicesCollection = getDb().collection('devices');
+        const result = await devicesCollection.updateOne(
+            { "cameras.id": cameraId },
+            { $set: { "cameras.$.isSleeping": false, "cameras.$.sleepExpiresAt": null } }
+        );
+        if (result.matchedCount === 0) return res.status(404).json({ message: 'Camera not found.' });
+        res.json({ success: true, message: 'Camera monitoring has been resumed.' });
+    } catch (error) {
+        res.status(500).json({ message: 'An error occurred.' });
+    }
+});
+
+// ... (rest of the file remains the same)
 
 router.post('/alerts/resolve-all', async (req, res) => {
     if (req.user.role !== 'Administrator') {
