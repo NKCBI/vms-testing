@@ -8,8 +8,11 @@ function initializeWebSocket(server) {
     alertWss = new WebSocket.Server({ noServer: true });
 
     alertWss.on('connection', (ws, req, user) => {
+        // --- MODIFICATION: Store the user's role on the WebSocket connection ---
+        ws.role = user.role; 
         ws.dispatchGroupId = user.dispatchGroupId ? user.dispatchGroupId.toString() : 'general';
-        console.log(`[Alerts] Client connected to group: ${ws.dispatchGroupId}`);
+        
+        console.log(`[Alerts] Client connected. Role: ${ws.role}, Group: ${ws.dispatchGroupId}`);
         ws.on('close', () => console.log('[Alerts] Client disconnected.'));
     });
 
@@ -53,19 +56,23 @@ function broadcastToGroup(dispatchGroupId, data) {
     const groupId = dispatchGroupId ? dispatchGroupId.toString() : 'general';
     const message = JSON.stringify(data);
 
-    // --- LOGGING ADDED ---
     console.log(`[BROADCAST] Starting broadcast for group: ${groupId}. Total connected clients: ${alertWss.clients.size}`);
     
     let clientsFoundForGroup = 0;
     alertWss.clients.forEach((client, index) => {
         const clientIdentifier = `Client #${index + 1}`;
         if (client.readyState === WebSocket.OPEN) {
-            if (client.dispatchGroupId === groupId) {
-                console.log(`[BROADCAST]   - ${clientIdentifier} (Group: ${client.dispatchGroupId}): MATCH FOUND. SENDING message.`);
+            // --- MODIFICATION: Check if the client is an Admin OR in the correct group ---
+            const isAdmin = client.role === 'Administrator';
+            const isInGroup = client.dispatchGroupId === groupId;
+
+            if (isAdmin || isInGroup) {
+                let reason = isAdmin ? 'IS ADMIN' : 'GROUP MATCH';
+                console.log(`[BROADCAST]   - ${clientIdentifier} (Role: ${client.role}, Group: ${client.dispatchGroupId}): MATCH FOUND (${reason}). SENDING message.`);
                 client.send(message);
                 clientsFoundForGroup++;
             } else {
-                console.log(`[BROADCAST]   - ${clientIdentifier} (Group: ${client.dispatchGroupId}): SKIPPING (group mismatch).`);
+                console.log(`[BROADCAST]   - ${clientIdentifier} (Role: ${client.role}, Group: ${client.dispatchGroupId}): SKIPPING (group mismatch).`);
             }
         } else {
             console.log(`[BROADCAST]   - ${clientIdentifier}: SKIPPING (connection not open).`);
