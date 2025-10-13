@@ -83,20 +83,23 @@ async function syncWithTuringAPI() {
         const siteFromAPI = allSitesFromAllAccounts[siteId];
         const existingSite = existingDevicesMap.get(siteId);
 
-        // --- FIX: Added the missing 'pertinent_info' field ---
         let profileData = existingSite ? {
             account_number: existingSite.account_number,
             district: existingSite.district,
             pertinent_info: existingSite.pertinent_info,
         } : {};
 
+        // --- MODIFICATION: Preserve per-camera settings ---
         const updatedCameras = siteFromAPI.cameras.map(cameraFromAPI => {
             const existingCamera = existingSite?.cameras.find(c => c.id === cameraFromAPI.id);
             return { 
                 id: cameraFromAPI.id, 
                 name: cameraFromAPI.name, 
+                turingApiToken: cameraFromAPI.turingApiToken,
+                // Preserve existing settings or default them
                 isMonitored: existingCamera ? existingCamera.isMonitored : false,
-                turingApiToken: cameraFromAPI.turingApiToken 
+                isSleeping: existingCamera ? existingCamera.isSleeping : false,
+                sleepExpiresAt: existingCamera ? existingCamera.sleepExpiresAt : null,
             };
         });
 
@@ -104,7 +107,11 @@ async function syncWithTuringAPI() {
             updateOne: {
                 filter: { _id: siteId },
                 update: { 
-                    $set: { name: siteFromAPI.name, cameras: updatedCameras, ...profileData },
+                    $set: { 
+                        name: siteFromAPI.name, 
+                        cameras: updatedCameras, 
+                        ...profileData 
+                    },
                     $setOnInsert: { isConfigured: false }
                 },
                 upsert: true
