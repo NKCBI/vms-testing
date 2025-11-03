@@ -54,6 +54,7 @@ router.post('/rtsp-url', async (req, res) => {
             console.log(`[RTSP] Successfully retrieved original URL: ${originalUrl}`);
             const authenticatedUrl = originalUrl.replace('rtsp://', `rtsp://token:${turingAccessToken}@`);
 
+            console.log(`[RTSP-DEBUG] Full URL for testing: ${authenticatedUrl}`);
             console.log(`[API] Successfully authenticated and retrieved stream for camera ${cameraIdInt}.`);
 
             turingApiResponse.data.ret.play_url = authenticatedUrl;
