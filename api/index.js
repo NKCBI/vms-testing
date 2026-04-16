@@ -244,7 +244,14 @@ router.post('/cameras/:cameraId/sleep', async (req, res) => {
         expirationDate.setHours(expirationDate.getHours() + hours);
         const result = await devicesCollection.updateOne(
             { "cameras.id": cameraId },
-            { $set: { "cameras.$.isSleeping": true, "cameras.$.sleepExpiresAt": expirationDate } }
+            {
+                $set: {
+                    "cameras.$.isSleeping": true,
+                    "cameras.$.sleepExpiresAt": expirationDate,
+                    [`cameraSettings.${cameraId}.isSleeping`]: true,
+                    [`cameraSettings.${cameraId}.sleepExpiresAt`]: expirationDate,
+                }
+            }
         );
         if (result.matchedCount === 0) return res.status(404).json({ message: 'Camera not found.' });
         res.json({ success: true, message: `Camera will sleep until ${expirationDate.toLocaleString()}` });
@@ -262,7 +269,14 @@ router.post('/cameras/:cameraId/wakeup', async (req, res) => {
         const devicesCollection = getDb().collection('devices');
         const result = await devicesCollection.updateOne(
             { "cameras.id": cameraId },
-            { $set: { "cameras.$.isSleeping": false, "cameras.$.sleepExpiresAt": null } }
+            {
+                $set: {
+                    "cameras.$.isSleeping": false,
+                    "cameras.$.sleepExpiresAt": null,
+                    [`cameraSettings.${cameraId}.isSleeping`]: false,
+                    [`cameraSettings.${cameraId}.sleepExpiresAt`]: null,
+                }
+            }
         );
         if (result.matchedCount === 0) return res.status(404).json({ message: 'Camera not found.' });
         res.json({ success: true, message: 'Camera monitoring has been resumed.' });
@@ -340,14 +354,44 @@ router.get('/devices', async (req, res) => {
 
 router.put('/cameras/:id/monitor', async (req, res) => {
     const devicesCollection = getDb().collection('devices');
-    await devicesCollection.updateOne({ "cameras.id": parseInt(req.params.id) }, { $set: { "cameras.$.isMonitored": req.body.isMonitored } });
+    const cameraId = parseInt(req.params.id);
+    await devicesCollection.updateOne(
+        { "cameras.id": cameraId },
+        {
+            $set: {
+                "cameras.$.isMonitored": req.body.isMonitored,
+                [`cameraSettings.${cameraId}.isMonitored`]: req.body.isMonitored,
+            }
+        }
+    );
     res.json({ success: true });
 });
 
 router.put('/sites/:siteId/monitor-all', async (req, res) => {
-    const devicesCollection = getDb().collection('devices');
-    await devicesCollection.updateOne({ _id: parseInt(req.params.siteId) }, { $set: { "cameras.$[].isMonitored": req.body.isMonitored } });
-    res.json({ success: true });
+    try {
+        const devicesCollection = getDb().collection('devices');
+        const siteId = parseInt(req.params.siteId);
+        const { isMonitored } = req.body;
+
+        const site = await devicesCollection.findOne({ _id: siteId });
+        if (!site) return res.status(404).json({ message: 'Site not found.' });
+
+        // Update every camera's isMonitored in cameraSettings too so the
+        // setting survives removal/re-add cycles.
+        const settingsUpdate = {};
+        for (const camera of site.cameras) {
+            settingsUpdate[`cameraSettings.${camera.id}.isMonitored`] = isMonitored;
+        }
+
+        await devicesCollection.updateOne(
+            { _id: siteId },
+            { $set: { "cameras.$[].isMonitored": isMonitored, ...settingsUpdate } }
+        );
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Failed to update all cameras for site:', error);
+        res.status(500).json({ message: 'An error occurred.' });
+    }
 });
 
 router.put('/devices/:id/profile', async (req, res) => {

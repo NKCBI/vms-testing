@@ -89,28 +89,48 @@ async function syncWithTuringAPI() {
             pertinent_info: existingSite.pertinent_info,
         } : {};
 
-        // --- MODIFICATION: Preserve per-camera settings ---
+        // --- Preserve per-camera settings, surviving removal/re-add cycles ---
+        // cameraSettings is a persistent map keyed by camera ID. It outlives the cameras
+        // array, so if a camera is temporarily removed from Turing Vision and re-added
+        // (same ID), its isMonitored state is restored instead of resetting to false.
+        const persistedSettings = existingSite?.cameraSettings || {};
+
         const updatedCameras = siteFromAPI.cameras.map(cameraFromAPI => {
+            // First check the live cameras array, then fall back to the persisted map.
             const existingCamera = existingSite?.cameras.find(c => c.id === cameraFromAPI.id);
-            return { 
-                id: cameraFromAPI.id, 
-                name: cameraFromAPI.name, 
+            const savedSettings = persistedSettings[cameraFromAPI.id];
+            const source = existingCamera || savedSettings;
+            return {
+                id: cameraFromAPI.id,
+                name: cameraFromAPI.name,
                 turingApiToken: cameraFromAPI.turingApiToken,
-                // Preserve existing settings or default them
-                isMonitored: existingCamera ? existingCamera.isMonitored : false,
-                isSleeping: existingCamera ? existingCamera.isSleeping : false,
-                sleepExpiresAt: existingCamera ? existingCamera.sleepExpiresAt : null,
+                isMonitored: source ? source.isMonitored : false,
+                isSleeping: source ? source.isSleeping : false,
+                sleepExpiresAt: source ? source.sleepExpiresAt : null,
             };
         });
+
+        // Rebuild the persisted settings map so it always reflects the latest state.
+        // We keep ALL previously seen cameras (not just current ones) so re-added cameras
+        // can restore their settings.
+        const updatedCameraSettings = { ...persistedSettings };
+        for (const camera of updatedCameras) {
+            updatedCameraSettings[camera.id] = {
+                isMonitored: camera.isMonitored,
+                isSleeping: camera.isSleeping,
+                sleepExpiresAt: camera.sleepExpiresAt,
+            };
+        }
 
         bulkOps.push({
             updateOne: {
                 filter: { _id: siteId },
-                update: { 
-                    $set: { 
-                        name: siteFromAPI.name, 
-                        cameras: updatedCameras, 
-                        ...profileData 
+                update: {
+                    $set: {
+                        name: siteFromAPI.name,
+                        cameras: updatedCameras,
+                        cameraSettings: updatedCameraSettings,
+                        ...profileData
                     },
                     $setOnInsert: { isConfigured: false }
                 },
