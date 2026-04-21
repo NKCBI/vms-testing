@@ -143,6 +143,8 @@ async function syncWithTuringAPI() {
 
     // Remove sites that no longer exist in Turing
     const activeSiteIds = Object.keys(allSitesFromAllAccounts).map(id => parseInt(id));
+    console.log(`[SYNC] Active site IDs to keep: ${JSON.stringify(activeSiteIds)}`);
+    console.log(`[SYNC] Sites collected:`, Object.keys(allSitesFromAllAccounts).map(id => `${id} => "${allSitesFromAllAccounts[id].name}" (${allSitesFromAllAccounts[id].cameras.length} cameras)`));
     const deleteResult = await devicesCollection.deleteMany({ _id: { $nin: activeSiteIds } });
     if (deleteResult.deletedCount > 0) {
         console.log(`[SYNC] Removed ${deleteResult.deletedCount} stale site(s) no longer present in Turing.`);
