@@ -3,9 +3,9 @@ const { getDb } = require('../database');
 
 // This object will act as a fast, in-memory cache for our settings.
 let systemSettings = {
-    turingApiToken: null,
+    turingApiTokens: [],
     webhookSecret: null,
-    timezone: 'UTC', // Default to UTC
+    timezone: 'UTC',
 };
 
 /**
