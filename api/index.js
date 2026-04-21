@@ -6,7 +6,8 @@ const crypto = require('crypto');
 const { getDb } = require('../database');
 const authenticateToken = require('../middleware/auth');
 const { loadSystemSettings, getSystemSettings } = require('../services/settings');
-const videoRoutes = require('./video'); 
+const { syncWithTuringAPI } = require('../services/turingSync');
+const videoRoutes = require('./video');
 
 const router = express.Router();
 
@@ -542,6 +543,19 @@ router.delete('/dispatch-groups/:id', async (req, res) => {
     await getDb().collection('dispatchGroups').deleteOne({ _id: new ObjectId(id) });
     await getDb().collection('users').updateMany({ dispatchGroupId: new ObjectId(id) }, { $unset: { dispatchGroupId: "" } });
     res.json({ success: true });
+});
+
+router.post('/settings/sync-turing', async (req, res) => {
+    if (req.user.role !== 'Administrator') {
+        return res.status(403).json({ message: 'Forbidden' });
+    }
+    try {
+        await syncWithTuringAPI();
+        res.json({ success: true, message: 'Turing API synchronization started successfully.' });
+    } catch (error) {
+        console.error("Manual sync failed:", error);
+        res.status(500).json({ success: false, message: 'Synchronization failed.' });
+    }
 });
 
 module.exports = router;

@@ -140,6 +140,14 @@ async function syncWithTuringAPI() {
     }
 
     if (bulkOps.length > 0) await devicesCollection.bulkWrite(bulkOps);
+
+    // Remove sites that no longer exist in Turing
+    const activeSiteIds = Object.keys(allSitesFromAllAccounts).map(id => parseInt(id));
+    const deleteResult = await devicesCollection.deleteMany({ _id: { $nin: activeSiteIds } });
+    if (deleteResult.deletedCount > 0) {
+        console.log(`[SYNC] Removed ${deleteResult.deletedCount} stale site(s) no longer present in Turing.`);
+    }
+
     console.log(`[SYNC] Synchronization with Turing API complete for all accounts.`);
 }
 
@@ -159,4 +167,5 @@ function startSync() {
 
 module.exports = {
     startSync,
+    syncWithTuringAPI
 };
